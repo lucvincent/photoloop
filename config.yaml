@@ -1,0 +1,231 @@
+# ============================================================
+# PhotoLoop Configuration
+# ============================================================
+#
+# This file controls all aspects of your PhotoLoop photo frame.
+# Edit this file directly or use the web interface at:
+#   http://<raspberry-pi-ip>:8080
+#
+# After editing, restart PhotoLoop or use 'photoloop reload'
+# ============================================================
+
+# ------------------------------------------------------------
+# Albums - List of public Google Photos album URLs to display
+# ------------------------------------------------------------
+# Add one or more public (world-visible) Google Photos albums.
+# You can use either the short URL (photos.app.goo.gl/...) or
+# the full URL (photos.google.com/share/...)
+#
+# To make an album public:
+#   1. Open Google Photos and go to the album
+#   2. Click Share > Get link
+#   3. Set "Link sharing" to ON
+#   4. Copy the link and paste it below
+#
+albums:
+  - url: "https://photos.app.goo.gl/YOUR_ALBUM_URL_HERE"
+    name: "My Photos"    # Optional friendly name (shown in logs/web UI)
+  # Add more albums:
+  # - url: "https://photos.app.goo.gl/ANOTHER_ALBUM"
+  #   name: "Vacation 2024"
+  # - url: "https://photos.app.goo.gl/YET_ANOTHER"
+  #   name: "Family Events"
+
+# ------------------------------------------------------------
+# Sync Settings - How often to check for new photos/videos
+# ------------------------------------------------------------
+sync:
+  interval_minutes: 60       # Check albums for new content (0 = manual only)
+  full_resolution: true      # true = original quality
+                             # false = limit to max_dimension
+  max_dimension: 1920        # Max width/height if full_resolution is false
+                             # Use 3840 for 4K displays
+
+# ------------------------------------------------------------
+# Display Settings - Slideshow appearance and behavior
+# ------------------------------------------------------------
+display:
+  # Resolution: "auto" detects screen size automatically
+  # Or specify explicitly: "1920x1080", "3840x2160" (4K), "1280x720"
+  resolution: "auto"
+
+  photo_duration_seconds: 30       # How long each photo is shown
+  video_enabled: true              # Set to false to skip videos entirely
+
+  # Transition between photos
+  # Options: fade, slide_left, slide_right, slide_up, slide_down, random
+  transition_type: "fade"
+  transition_duration_ms: 1000     # Transition animation length in milliseconds
+
+  # Photo order
+  # Options: random, sequential
+  order: "random"
+
+# ------------------------------------------------------------
+# Scaling and Cropping - How photos fill the screen
+# ------------------------------------------------------------
+scaling:
+  # Scaling mode determines how photos fit the screen:
+  #   "fill"    - Scale to fill entire screen, crop excess (no black bars)
+  #   "fit"     - Scale to fit within screen, may have black bars
+  #   "stretch" - Stretch to fill (distorts aspect ratio - not recommended)
+  mode: "fill"
+
+  # Smart cropping (only applies when mode is "fill")
+  smart_crop: true                 # Enable intelligent crop region selection
+
+  # Face detection for smart cropping
+  # When enabled, crops will try to keep faces visible and well-positioned
+  face_detection: true
+
+  # Where to position detected faces after cropping
+  # Options:
+  #   "center"         - Center faces in the frame
+  #   "rule_of_thirds" - Position faces at rule-of-thirds intersection
+  #   "top_third"      - Position faces in upper third (good for portraits)
+  face_position: "center"
+
+  # Fallback crop position when no faces are detected
+  # Options: "center", "top", "bottom"
+  fallback_crop: "center"
+
+# ------------------------------------------------------------
+# Ken Burns Effect - Slow zoom/pan during photo display
+# ------------------------------------------------------------
+# The Ken Burns effect adds subtle motion to still photos by slowly
+# zooming and panning. This creates a more engaging viewing experience.
+ken_burns:
+  enabled: true
+
+  # Zoom range: [minimum, maximum]
+  # 1.0 = no zoom, 1.15 = 15% zoom in
+  # The effect will zoom between these values
+  zoom_range: [1.0, 1.15]
+
+  # Pan speed as fraction of image dimension per second
+  # 0.02 = move 2% of image width/height per second
+  pan_speed: 0.02
+
+  # Randomize zoom direction and pan path
+  # If false, uses preset patterns that alternate
+  randomize: true
+
+# ------------------------------------------------------------
+# Overlay Settings - Photo date and caption display
+# ------------------------------------------------------------
+# Shows photo information overlaid on the image during display
+overlay:
+  enabled: true
+
+  # What information to show
+  show_date: true                  # Photo date from EXIF/metadata
+  show_caption: true               # Description/caption if available
+
+  # Date formatting (Python strftime format)
+  # Examples:
+  #   "%B %d, %Y"    -> "January 15, 2024"
+  #   "%Y-%m-%d"     -> "2024-01-15"
+  #   "%d/%m/%Y"     -> "15/01/2024"
+  #   "%b %d, %Y"    -> "Jan 15, 2024"
+  date_format: "%B %d, %Y"
+
+  # Overlay position on screen
+  # Options: bottom_left, bottom_right, top_left, top_right
+  position: "bottom_left"
+
+  # Text appearance
+  font_size: 24                    # Font size in pixels
+  font_color: [255, 255, 255]      # RGB color [R, G, B]
+                                   # [255, 255, 255] = white
+                                   # [255, 255, 0] = yellow
+
+  # Background behind text (improves readability)
+  background_color: [0, 0, 0, 128] # RGBA [R, G, B, Alpha]
+                                   # [0, 0, 0, 128] = semi-transparent black
+                                   # Alpha: 0 = transparent, 255 = opaque
+
+  padding: 20                      # Distance from screen edge in pixels
+  max_caption_length: 200          # Truncate long captions (0 = no limit)
+
+# ------------------------------------------------------------
+# Schedule - When to display slideshow vs off-hours mode
+# ------------------------------------------------------------
+# Configure when the slideshow runs. Outside scheduled hours,
+# the display will show either a black screen or a clock.
+schedule:
+  enabled: true
+
+  # What to show outside scheduled hours
+  # Options:
+  #   "black" - Turn display black (saves energy)
+  #   "clock" - Show a simple clock
+  off_hours_mode: "black"
+
+  # Weekday schedule (Monday through Friday)
+  weekday:
+    start_time: "07:00"            # 24-hour format HH:MM
+    end_time: "22:00"
+
+  # Weekend schedule (Saturday and Sunday)
+  weekend:
+    start_time: "08:00"            # Sleep in on weekends!
+    end_time: "23:00"              # Stay up later
+
+  # Optional: Override schedule for specific days
+  # Uncomment and modify as needed
+  # overrides:
+  #   monday:
+  #     start_time: "06:00"        # Early meetings on Monday
+  #     end_time: "21:00"
+  #   friday:
+  #     start_time: "07:00"
+  #     end_time: "23:30"          # Friday night!
+  #   saturday:
+  #     start_time: "09:00"        # Extra sleep on Saturday
+  #     end_time: "00:00"          # Midnight (use 00:00 for midnight)
+
+# ------------------------------------------------------------
+# Cache Settings - Local storage for photos/videos
+# ------------------------------------------------------------
+cache:
+  # Where to store downloaded photos and videos
+  directory: "/var/lib/photoloop/cache"
+
+  # Maximum cache size in megabytes
+  # When exceeded, oldest photos (by last_seen date) are removed
+  # Recommended: At least 500 MB, more for 4K photos
+  max_size_mb: 1000
+
+# ------------------------------------------------------------
+# Web Interface - Remote configuration via browser
+# ------------------------------------------------------------
+web:
+  enabled: true
+  port: 8080                       # Web interface port
+  host: "0.0.0.0"                  # "0.0.0.0" = accessible from network
+                                   # "127.0.0.1" = localhost only
+
+# ============================================================
+# Quick Start Guide
+# ============================================================
+#
+# 1. Replace the album URL above with your public Google Photos album
+# 2. Run: photoloop sync (to download photos)
+# 3. Run: photoloop start (or let systemd start it)
+# 4. Access web interface: http://<pi-ip>:8080
+#
+# Commands:
+#   photoloop status  - Show current state
+#   photoloop start   - Force slideshow on
+#   photoloop stop    - Force slideshow off
+#   photoloop resume  - Follow schedule
+#   photoloop sync    - Download new photos
+#   photoloop reload  - Reload this config
+#
+# Service control:
+#   sudo systemctl start photoloop
+#   sudo systemctl stop photoloop
+#   sudo systemctl restart photoloop
+#   sudo systemctl status photoloop
+#
+# ============================================================

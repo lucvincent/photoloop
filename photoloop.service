@@ -1,0 +1,44 @@
+[Unit]
+Description=PhotoLoop - Raspberry Pi Photo Frame
+Documentation=https://github.com/yourusername/photoloop
+After=network.target graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+
+# Working directory
+WorkingDirectory=/opt/photoloop
+
+# Environment
+Environment=DISPLAY=:0
+Environment=SDL_VIDEODRIVER=x11
+Environment=PHOTOLOOP_LOG_DIR=/var/log/photoloop
+Environment=PHOTOLOOP_API_URL=http://localhost:8080
+
+# Main executable
+ExecStart=/opt/photoloop/venv/bin/python -m photoloop.src.main -c /etc/photoloop/config.yaml
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=photoloop
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+
+# Allow write access to required directories
+ReadWritePaths=/var/lib/photoloop
+ReadWritePaths=/var/log/photoloop
+
+[Install]
+WantedBy=graphical.target

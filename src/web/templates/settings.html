@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhotoLoop Settings</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PhotoLoop</h1>
+            <div id="status-indicator" class="status">Loading...</div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="control">Control</button>
+            <button class="tab" data-tab="albums">Albums</button>
+            <button class="tab" data-tab="display">Display</button>
+            <button class="tab" data-tab="schedule">Schedule</button>
+            <button class="tab" data-tab="cache">Cache</button>
+        </nav>
+
+        <!-- Control Tab -->
+        <section id="control" class="tab-content active">
+            <h2>Slideshow Control</h2>
+
+            <div class="control-buttons">
+                <button id="btn-start" class="btn btn-success">Start Now</button>
+                <button id="btn-stop" class="btn btn-danger">Stop</button>
+                <button id="btn-resume" class="btn btn-primary">Resume Schedule</button>
+                <button id="btn-next" class="btn">Next Photo</button>
+            </div>
+
+            <div class="status-box">
+                <h3>Current Status</h3>
+                <div id="current-status">
+                    <p><strong>State:</strong> <span id="state">-</span></p>
+                    <p><strong>Next Transition:</strong> <span id="next-transition">-</span></p>
+                    <p><strong>Photos Cached:</strong> <span id="photo-count">-</span></p>
+                    <p><strong>Cache Size:</strong> <span id="cache-size">-</span> MB</p>
+                </div>
+            </div>
+
+            <div class="sync-section">
+                <h3>Album Sync</h3>
+                <button id="btn-sync" class="btn btn-primary">Sync Now</button>
+                <span id="sync-status"></span>
+            </div>
+        </section>
+
+        <!-- Albums Tab -->
+        <section id="albums" class="tab-content">
+            <h2>Google Photos Albums</h2>
+
+            <div class="form-group">
+                <label for="new-album-url">Add Album URL</label>
+                <input type="url" id="new-album-url" placeholder="https://photos.app.goo.gl/...">
+            </div>
+            <div class="form-group">
+                <label for="new-album-name">Album Name (optional)</label>
+                <input type="text" id="new-album-name" placeholder="My Album">
+            </div>
+            <button id="btn-add-album" class="btn btn-primary">Add Album</button>
+
+            <h3>Configured Albums</h3>
+            <ul id="album-list" class="album-list">
+                <!-- Albums will be loaded here -->
+            </ul>
+        </section>
+
+        <!-- Display Tab -->
+        <section id="display" class="tab-content">
+            <h2>Display Settings</h2>
+
+            <div class="form-group">
+                <label for="photo-duration">Photo Duration (seconds)</label>
+                <input type="number" id="photo-duration" min="5" max="300"
+                       value="{{ config.display.photo_duration_seconds }}">
+            </div>
+
+            <div class="form-group">
+                <label for="transition-type">Transition Type</label>
+                <select id="transition-type">
+                    <option value="fade" {% if config.display.transition_type == 'fade' %}selected{% endif %}>Fade</option>
+                    <option value="slide_left" {% if config.display.transition_type == 'slide_left' %}selected{% endif %}>Slide Left</option>
+                    <option value="slide_right" {% if config.display.transition_type == 'slide_right' %}selected{% endif %}>Slide Right</option>
+                    <option value="slide_up" {% if config.display.transition_type == 'slide_up' %}selected{% endif %}>Slide Up</option>
+                    <option value="slide_down" {% if config.display.transition_type == 'slide_down' %}selected{% endif %}>Slide Down</option>
+                    <option value="random" {% if config.display.transition_type == 'random' %}selected{% endif %}>Random</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="display-order">Photo Order</label>
+                <select id="display-order">
+                    <option value="random" {% if config.display.order == 'random' %}selected{% endif %}>Random</option>
+                    <option value="sequential" {% if config.display.order == 'sequential' %}selected{% endif %}>Sequential</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="ken-burns-enabled"
+                           {% if config.ken_burns.enabled %}checked{% endif %}>
+                    Enable Ken Burns Effect
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="overlay-enabled"
+                           {% if config.overlay.enabled %}checked{% endif %}>
+                    Show Date/Caption Overlay
+                </label>
+            </div>
+
+            <button id="btn-save-display" class="btn btn-primary">Save Display Settings</button>
+        </section>
+
+        <!-- Schedule Tab -->
+        <section id="schedule" class="tab-content">
+            <h2>Schedule Settings</h2>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="schedule-enabled"
+                           {% if config.schedule.enabled %}checked{% endif %}>
+                    Enable Schedule
+                </label>
+            </div>
+
+            <h3>Weekday Schedule (Mon-Fri)</h3>
+            <div class="time-range">
+                <div class="form-group">
+                    <label for="weekday-start">Start Time</label>
+                    <input type="time" id="weekday-start"
+                           value="{{ config.schedule.weekday.start_time }}">
+                </div>
+                <div class="form-group">
+                    <label for="weekday-end">End Time</label>
+                    <input type="time" id="weekday-end"
+                           value="{{ config.schedule.weekday.end_time }}">
+                </div>
+            </div>
+
+            <h3>Weekend Schedule (Sat-Sun)</h3>
+            <div class="time-range">
+                <div class="form-group">
+                    <label for="weekend-start">Start Time</label>
+                    <input type="time" id="weekend-start"
+                           value="{{ config.schedule.weekend.start_time }}">
+                </div>
+                <div class="form-group">
+                    <label for="weekend-end">End Time</label>
+                    <input type="time" id="weekend-end"
+                           value="{{ config.schedule.weekend.end_time }}">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="off-hours-mode">Off-Hours Display</label>
+                <select id="off-hours-mode">
+                    <option value="black" {% if config.schedule.off_hours_mode == 'black' %}selected{% endif %}>Black Screen</option>
+                    <option value="clock" {% if config.schedule.off_hours_mode == 'clock' %}selected{% endif %}>Clock</option>
+                </select>
+            </div>
+
+            <button id="btn-save-schedule" class="btn btn-primary">Save Schedule</button>
+        </section>
+
+        <!-- Cache Tab -->
+        <section id="cache" class="tab-content">
+            <h2>Cache Management</h2>
+
+            <div class="status-box">
+                <p><strong>Cache Directory:</strong> {{ config.cache.directory }}</p>
+                <p><strong>Max Size:</strong> {{ config.cache.max_size_mb }} MB</p>
+                <p><strong>Current Size:</strong> <span id="cache-size-detail">-</span> MB</p>
+                <p><strong>Photos:</strong> <span id="photo-count-detail">-</span></p>
+                <p><strong>Videos:</strong> <span id="video-count-detail">-</span></p>
+            </div>
+
+            <h3>Cached Photos</h3>
+            <div id="photo-grid" class="photo-grid">
+                <!-- Thumbnails will be loaded here -->
+            </div>
+
+            <button id="btn-clear-cache" class="btn btn-danger">Clear Cache</button>
+        </section>
+    </div>
+
+    <script>
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        // API helpers
+        async function apiCall(endpoint, method = 'GET', data = null) {
+            const options = { method };
+            if (data) {
+                options.headers = { 'Content-Type': 'application/json' };
+                options.body = JSON.stringify(data);
+            }
+            const response = await fetch(endpoint, options);
+            return response.json();
+        }
+
+        // Load status
+        async function loadStatus() {
+            try {
+                const status = await apiCall('/api/status');
+
+                if (status.schedule) {
+                    document.getElementById('state').textContent = status.schedule.state;
+                    if (status.schedule.next_transition.time) {
+                        const nextTime = new Date(status.schedule.next_transition.time);
+                        document.getElementById('next-transition').textContent =
+                            `${nextTime.toLocaleTimeString()} - ${status.schedule.next_transition.description}`;
+                    } else {
+                        document.getElementById('next-transition').textContent = 'Manual override active';
+                    }
+                }
+
+                if (status.cache) {
+                    document.getElementById('photo-count').textContent = status.cache.counts.photos;
+                    document.getElementById('cache-size').textContent = status.cache.size_mb;
+                    document.getElementById('photo-count-detail').textContent = status.cache.counts.photos;
+                    document.getElementById('video-count-detail').textContent = status.cache.counts.videos;
+                    document.getElementById('cache-size-detail').textContent = status.cache.size_mb;
+                }
+
+                document.getElementById('status-indicator').textContent = 'Connected';
+                document.getElementById('status-indicator').className = 'status online';
+            } catch (e) {
+                document.getElementById('status-indicator').textContent = 'Disconnected';
+                document.getElementById('status-indicator').className = 'status offline';
+            }
+        }
+
+        // Load albums
+        async function loadAlbums() {
+            const albums = await apiCall('/api/albums');
+            const list = document.getElementById('album-list');
+            list.innerHTML = '';
+            albums.forEach((album, index) => {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <span class="album-name">${album.name || 'Unnamed'}</span>
+                    <span class="album-url">${album.url}</span>
+                    <button class="btn btn-small btn-danger" onclick="deleteAlbum(${index})">Delete</button>
+                `;
+                list.appendChild(li);
+            });
+        }
+
+        // Add album
+        document.getElementById('btn-add-album').addEventListener('click', async () => {
+            const url = document.getElementById('new-album-url').value;
+            const name = document.getElementById('new-album-name').value;
+            if (!url) {
+                alert('Please enter an album URL');
+                return;
+            }
+            await apiCall('/api/albums', 'POST', { url, name });
+            document.getElementById('new-album-url').value = '';
+            document.getElementById('new-album-name').value = '';
+            loadAlbums();
+        });
+
+        // Delete album
+        async function deleteAlbum(index) {
+            if (confirm('Delete this album?')) {
+                await apiCall(`/api/albums/${index}`, 'DELETE');
+                loadAlbums();
+            }
+        }
+
+        // Control buttons
+        document.getElementById('btn-start').addEventListener('click', () => {
+            apiCall('/api/control/start', 'POST');
+            setTimeout(loadStatus, 500);
+        });
+        document.getElementById('btn-stop').addEventListener('click', () => {
+            apiCall('/api/control/stop', 'POST');
+            setTimeout(loadStatus, 500);
+        });
+        document.getElementById('btn-resume').addEventListener('click', () => {
+            apiCall('/api/control/resume', 'POST');
+            setTimeout(loadStatus, 500);
+        });
+        document.getElementById('btn-next').addEventListener('click', () => {
+            apiCall('/api/control/next', 'POST');
+        });
+
+        // Sync button
+        document.getElementById('btn-sync').addEventListener('click', async () => {
+            document.getElementById('sync-status').textContent = 'Syncing...';
+            await apiCall('/api/sync', 'POST');
+            document.getElementById('sync-status').textContent = 'Sync started';
+            setTimeout(() => {
+                document.getElementById('sync-status').textContent = '';
+                loadStatus();
+            }, 2000);
+        });
+
+        // Load photos
+        async function loadPhotos() {
+            const photos = await apiCall('/api/photos');
+            const grid = document.getElementById('photo-grid');
+            grid.innerHTML = '';
+            photos.slice(0, 20).forEach(photo => {
+                if (photo.type === 'photo') {
+                    const div = document.createElement('div');
+                    div.className = 'photo-thumb';
+                    div.innerHTML = `
+                        <img src="/api/photos/${photo.id}/thumbnail" alt="${photo.caption || ''}">
+                        <span>${photo.caption || photo.date || ''}</span>
+                    `;
+                    grid.appendChild(div);
+                }
+            });
+        }
+
+        // Initialize
+        loadStatus();
+        loadAlbums();
+        loadPhotos();
+        setInterval(loadStatus, 10000);
+    </script>
+</body>
+</html>

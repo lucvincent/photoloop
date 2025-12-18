@@ -1,0 +1,29 @@
+# PhotoLoop - Raspberry Pi Photo Frame Application
+# Dependencies
+
+# Display and graphics
+pygame>=2.5.0
+
+# Web interface
+flask>=3.0.0
+
+# Web scraping
+selenium>=4.15.0
+
+# Configuration
+pyyaml>=6.0
+
+# Image processing
+pillow>=10.0.0
+
+# Face detection
+opencv-python-headless>=4.8.0
+
+# Video playback
+ffpyplayer>=4.5.0
+
+# HTTP requests
+requests>=2.31.0
+
+# For CLI argument parsing (stdlib, but listed for clarity)
+# argparse is built-in
