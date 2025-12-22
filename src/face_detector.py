@@ -1,6 +1,6 @@
 """
 Face detection for smart cropping.
-Uses OpenCV's Haar Cascade classifier for lightweight CPU-based detection.
+Uses OpenCV's YuNet DNN-based detector for accurate face detection.
 """
 
 import logging
@@ -14,6 +14,10 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+# Default model path
+DEFAULT_MODEL_PATH = "/opt/photoloop/models/face_detection_yunet_2023mar.onnx"
+DEV_MODEL_PATH = "/home/luc/photoloop/models/face_detection_yunet_2023mar.onnx"
+
 
 @dataclass
 class FaceRegion:
@@ -25,6 +29,7 @@ class FaceRegion:
     y: float      # Top edge (0-1)
     width: float  # Width (0-1)
     height: float # Height (0-1)
+    confidence: float = 1.0  # Detection confidence (0-1)
 
     @property
     def center_x(self) -> float:
@@ -47,7 +52,8 @@ class FaceRegion:
             "x": self.x,
             "y": self.y,
             "width": self.width,
-            "height": self.height
+            "height": self.height,
+            "confidence": self.confidence
         }
 
     @classmethod
@@ -57,55 +63,87 @@ class FaceRegion:
             x=data["x"],
             y=data["y"],
             width=data["width"],
-            height=data["height"]
+            height=data["height"],
+            confidence=data.get("confidence", 1.0)
         )
 
 
 class FaceDetector:
     """
-    Detects faces in images using OpenCV Haar Cascades.
+    Detects faces in images using OpenCV's YuNet DNN detector.
 
-    This is a lightweight detector that works well on Raspberry Pi
-    without requiring a GPU.
+    YuNet is a modern, lightweight face detector that:
+    - Works well on CPU (designed for mobile/edge)
+    - Handles sunglasses, partial occlusions
+    - Provides confidence scores
+    - Has low false positive rate
     """
 
-    def __init__(self):
-        """Initialize the face detector with Haar cascade classifiers."""
-        # Load the pre-trained face cascade
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    def __init__(
+        self,
+        model_path: str = None,
+        confidence_threshold: float = 0.7,
+        nms_threshold: float = 0.3,
+        top_k: int = 50
+    ):
+        """
+        Initialize the face detector.
 
-        if not os.path.exists(cascade_path):
+        Args:
+            model_path: Path to YuNet ONNX model file.
+            confidence_threshold: Minimum confidence for detections (0-1).
+            nms_threshold: Non-max suppression threshold.
+            top_k: Maximum number of faces to detect.
+        """
+        self.confidence_threshold = confidence_threshold
+        self.nms_threshold = nms_threshold
+        self.top_k = top_k
+
+        # Find model file
+        if model_path and os.path.exists(model_path):
+            self.model_path = model_path
+        elif os.path.exists(DEFAULT_MODEL_PATH):
+            self.model_path = DEFAULT_MODEL_PATH
+        elif os.path.exists(DEV_MODEL_PATH):
+            self.model_path = DEV_MODEL_PATH
+        else:
             raise RuntimeError(
-                f"Haar cascade file not found at {cascade_path}. "
-                "Ensure OpenCV is properly installed."
+                f"YuNet model not found. Please download it to {DEFAULT_MODEL_PATH}\n"
+                "curl -L -o /opt/photoloop/models/face_detection_yunet_2023mar.onnx "
+                "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
             )
 
-        self.face_cascade = cv2.CascadeClassifier(cascade_path)
+        # Detector will be initialized per-image (needs image dimensions)
+        self._detector = None
+        self._current_size = None
 
-        # Optional: eye cascade for better face verification
-        eye_cascade_path = cv2.data.haarcascades + "haarcascade_eye.xml"
-        if os.path.exists(eye_cascade_path):
-            self.eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
-        else:
-            self.eye_cascade = None
+        logger.debug(f"Face detector initialized with model: {self.model_path}")
 
-        logger.debug("Face detector initialized")
+    def _get_detector(self, width: int, height: int) -> cv2.FaceDetectorYN:
+        """Get or create detector for given image size."""
+        if self._detector is None or self._current_size != (width, height):
+            self._detector = cv2.FaceDetectorYN.create(
+                self.model_path,
+                "",
+                (width, height),
+                self.confidence_threshold,
+                self.nms_threshold,
+                self.top_k
+            )
+            self._current_size = (width, height)
+        return self._detector
 
     def detect_faces(
         self,
         image_path: str,
-        min_size: Tuple[int, int] = (30, 30),
-        scale_factor: float = 1.1,
-        min_neighbors: int = 5
+        min_face_size: float = 0.02
     ) -> List[FaceRegion]:
         """
         Detect faces in an image.
 
         Args:
             image_path: Path to the image file.
-            min_size: Minimum face size in pixels (width, height).
-            scale_factor: Scale factor for multi-scale detection.
-            min_neighbors: Minimum neighbors for detection confidence.
+            min_face_size: Minimum face size as fraction of image (0-1).
 
         Returns:
             List of FaceRegion objects (normalized coordinates).
@@ -117,54 +155,71 @@ class FaceDetector:
                 logger.warning(f"Could not load image: {image_path}")
                 return []
 
-            # Get image dimensions
-            img_height, img_width = img.shape[:2]
-
-            # Convert to grayscale
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-            # Detect faces
-            faces = self.face_cascade.detectMultiScale(
-                gray,
-                scaleFactor=scale_factor,
-                minNeighbors=min_neighbors,
-                minSize=min_size,
-                flags=cv2.CASCADE_SCALE_IMAGE
-            )
-
-            # Convert to normalized FaceRegion objects
-            regions = []
-            for (x, y, w, h) in faces:
-                region = FaceRegion(
-                    x=x / img_width,
-                    y=y / img_height,
-                    width=w / img_width,
-                    height=h / img_height
-                )
-                regions.append(region)
-
-            logger.debug(f"Detected {len(regions)} faces in {image_path}")
-            return regions
+            return self._detect_faces_impl(img, min_face_size)
 
         except Exception as e:
             logger.error(f"Error detecting faces in {image_path}: {e}")
             return []
 
+    def _detect_faces_impl(
+        self,
+        img: np.ndarray,
+        min_face_size: float = 0.02
+    ) -> List[FaceRegion]:
+        """Internal face detection implementation."""
+        img_height, img_width = img.shape[:2]
+
+        # Get detector for this image size
+        detector = self._get_detector(img_width, img_height)
+
+        # Detect faces
+        _, faces = detector.detect(img)
+
+        if faces is None:
+            return []
+
+        # Convert to FaceRegion objects
+        regions = []
+        min_size_pixels = min_face_size * min(img_width, img_height)
+
+        for face in faces:
+            # YuNet returns: x, y, w, h, landmarks..., confidence
+            x, y, w, h = face[0:4]
+            confidence = face[14]  # Last element is confidence
+
+            # Skip small faces
+            if w < min_size_pixels or h < min_size_pixels:
+                continue
+
+            # Normalize coordinates
+            norm_x = x / img_width
+            norm_y = y / img_height
+            norm_w = w / img_width
+            norm_h = h / img_height
+
+            region = FaceRegion(
+                x=float(norm_x),
+                y=float(norm_y),
+                width=float(norm_w),
+                height=float(norm_h),
+                confidence=float(confidence)
+            )
+            regions.append(region)
+
+        logger.debug(f"Detected {len(regions)} faces (confidence >= {self.confidence_threshold})")
+        return regions
+
     def detect_faces_from_pil(
         self,
         pil_image: Image.Image,
-        min_size: Tuple[int, int] = (30, 30),
-        scale_factor: float = 1.1,
-        min_neighbors: int = 5
+        min_face_size: float = 0.02
     ) -> List[FaceRegion]:
         """
         Detect faces in a PIL Image.
 
         Args:
             pil_image: PIL Image object.
-            min_size: Minimum face size in pixels.
-            scale_factor: Scale factor for multi-scale detection.
-            min_neighbors: Minimum neighbors for detection confidence.
+            min_face_size: Minimum face size as fraction of image.
 
         Returns:
             List of FaceRegion objects (normalized coordinates).
@@ -175,45 +230,19 @@ class FaceDetector:
 
             # Handle different color modes
             if len(img_array.shape) == 2:
-                # Already grayscale
-                gray = img_array
+                # Grayscale -> BGR
+                img = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
             elif img_array.shape[2] == 3:
-                # RGB -> BGR -> Gray
-                img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-                gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+                # RGB -> BGR
+                img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
             elif img_array.shape[2] == 4:
-                # RGBA -> RGB -> BGR -> Gray
-                img_rgb = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
-                img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+                # RGBA -> BGR
+                img = cv2.cvtColor(img_array, cv2.COLOR_RGBA2BGR)
             else:
                 logger.warning(f"Unexpected image shape: {img_array.shape}")
                 return []
 
-            # Get dimensions
-            img_height, img_width = gray.shape[:2]
-
-            # Detect faces
-            faces = self.face_cascade.detectMultiScale(
-                gray,
-                scaleFactor=scale_factor,
-                minNeighbors=min_neighbors,
-                minSize=min_size,
-                flags=cv2.CASCADE_SCALE_IMAGE
-            )
-
-            # Convert to normalized FaceRegion objects
-            regions = []
-            for (x, y, w, h) in faces:
-                region = FaceRegion(
-                    x=x / img_width,
-                    y=y / img_height,
-                    width=w / img_width,
-                    height=h / img_height
-                )
-                regions.append(region)
-
-            return regions
+            return self._detect_faces_impl(img, min_face_size)
 
         except Exception as e:
             logger.error(f"Error detecting faces: {e}")
