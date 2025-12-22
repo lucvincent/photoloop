@@ -188,6 +188,13 @@ if [ -d "$SCRIPT_DIR/src" ]; then
     mkdir -p "$INSTALL_DIR/photoloop/src"
     cp -r "$SCRIPT_DIR/src/"* "$INSTALL_DIR/photoloop/src/"
     touch "$INSTALL_DIR/photoloop/__init__.py"
+
+    # Copy face detection model
+    if [ -d "$SCRIPT_DIR/models" ]; then
+        mkdir -p "$INSTALL_DIR/models"
+        cp -r "$SCRIPT_DIR/models/"* "$INSTALL_DIR/models/"
+        echo -e "${GREEN}Face detection model installed.${NC}"
+    fi
 else
     echo -e "${RED}Error: Source files not found. Run this script from the photoloop directory.${NC}"
     exit 1
