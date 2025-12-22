@@ -248,6 +248,19 @@ def create_app(
 
         return "Not found", 404
 
+    @app.route('/api/cache/clear', methods=['POST'])
+    def api_clear_cache():
+        """Clear all cached photos."""
+        try:
+            if app.cache_manager:
+                app.cache_manager.clear_cache()
+                return jsonify({"success": True, "message": "Cache cleared"})
+            else:
+                return jsonify({"error": "Cache manager not available"}), 503
+        except Exception as e:
+            logger.error(f"Error clearing cache: {e}")
+            return jsonify({"error": str(e)}), 500
+
     return app
 
 

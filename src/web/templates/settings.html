@@ -328,6 +328,30 @@
             });
         }
 
+        // Clear cache button
+        document.getElementById('btn-clear-cache').addEventListener('click', async () => {
+            if (confirm('Are you sure you want to clear all cached photos? They will be re-downloaded on the next sync.')) {
+                const btn = document.getElementById('btn-clear-cache');
+                btn.disabled = true;
+                btn.textContent = 'Clearing...';
+                try {
+                    const result = await apiCall('/api/cache/clear', 'POST');
+                    if (result.success) {
+                        alert('Cache cleared successfully. Run sync to re-download photos.');
+                        loadStatus();
+                        loadPhotos();
+                    } else {
+                        alert('Error: ' + (result.error || 'Unknown error'));
+                    }
+                } catch (e) {
+                    alert('Error clearing cache: ' + e);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Clear Cache';
+                }
+            }
+        });
+
         // Initialize
         loadStatus();
         loadAlbums();

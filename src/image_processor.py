@@ -272,46 +272,54 @@ class ImageProcessor:
         Returns:
             (x, y) position for crop region.
         """
-        # Get face center
-        face_center = get_faces_center(faces)
+        # Filter to significant faces only (ignore tiny background faces)
+        # A face should be at least 2% of image dimension to be considered
+        min_face_size = 0.02
+        significant_faces = [
+            f for f in faces
+            if f.width >= min_face_size or f.height >= min_face_size
+        ]
+
+        # If no significant faces, use all faces or fallback
+        if not significant_faces:
+            significant_faces = faces
+
+        if not significant_faces:
+            return self._get_fallback_crop_position(crop_width, crop_height)
+
+        # Get face center (weighted by size)
+        face_center = get_faces_center(significant_faces)
         if not face_center:
             return self._get_fallback_crop_position(crop_width, crop_height)
 
         face_cx, face_cy = face_center
 
-        # Get face bounding box
-        face_bbox = get_faces_bounding_box(faces, margin=0.1)
+        # Get face bounding box for significant faces only
+        face_bbox = get_faces_bounding_box(significant_faces, margin=0.05)
 
-        # Determine target position for faces based on preference
-        if self.face_position == "rule_of_thirds":
-            # Position faces at left third intersection (more pleasing)
-            target_x = 1/3
-            target_y = 1/3
-        elif self.face_position == "top_third":
-            # Position faces in upper third
-            target_x = 0.5
-            target_y = 1/3
-        else:  # center
-            target_x = 0.5
-            target_y = 0.5
+        # Use center positioning for better results (rule_of_thirds often crops badly)
+        # Position face center in the middle of the crop region
+        target_x = 0.5
+        target_y = 0.5
 
         # Calculate crop position to put face center at target position
         crop_x = face_cx - target_x * crop_width
         crop_y = face_cy - target_y * crop_height
 
-        # Ensure faces are within crop region
+        # Ensure significant faces are within crop region
         if face_bbox:
             fb_x, fb_y, fb_w, fb_h = face_bbox
 
-            # Adjust if faces would be cropped
-            if fb_x < crop_x:
-                crop_x = max(0, fb_x - 0.05)
-            if fb_x + fb_w > crop_x + crop_width:
-                crop_x = min(1 - crop_width, fb_x + fb_w - crop_width + 0.05)
-            if fb_y < crop_y:
-                crop_y = max(0, fb_y - 0.05)
-            if fb_y + fb_h > crop_y + crop_height:
-                crop_y = min(1 - crop_height, fb_y + fb_h - crop_height + 0.05)
+            # Adjust if faces would be cropped (with small margin)
+            margin = 0.02
+            if fb_x < crop_x + margin:
+                crop_x = fb_x - margin
+            if fb_x + fb_w > crop_x + crop_width - margin:
+                crop_x = fb_x + fb_w - crop_width + margin
+            if fb_y < crop_y + margin:
+                crop_y = fb_y - margin
+            if fb_y + fb_h > crop_y + crop_height - margin:
+                crop_y = fb_y + fb_h - crop_height + margin
 
         # Clamp to valid range
         crop_x = max(0, min(1 - crop_width, crop_x))

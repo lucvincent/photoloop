@@ -132,6 +132,36 @@ class CacheManager:
                 try:
                     with open(self.metadata_path, 'r') as f:
                         data = json.load(f)
+
+                    # Check if resolution settings changed
+                    cached_settings = data.get("settings", {})
+                    current_max_dim = self.config.sync.max_dimension
+                    current_full_res = self.config.sync.full_resolution
+                    cached_max_dim = cached_settings.get("max_dimension")
+                    cached_full_res = cached_settings.get("full_resolution")
+
+                    if (cached_max_dim is not None and
+                        (cached_max_dim != current_max_dim or cached_full_res != current_full_res)):
+                        logger.warning(
+                            f"Resolution settings changed (was: {cached_max_dim}px/full={cached_full_res}, "
+                            f"now: {current_max_dim}px/full={current_full_res}). "
+                            f"Clearing cache to re-download at new resolution."
+                        )
+                        # Delete all cached files
+                        for media_id, media_data in data.get("media", {}).items():
+                            try:
+                                local_path = media_data.get("local_path")
+                                if local_path and os.path.exists(local_path):
+                                    os.remove(local_path)
+                            except Exception:
+                                pass
+                        # Clear metadata
+                        self._media = {}
+                        self._playlist = []
+                        self._save_metadata()
+                        logger.info("Cache cleared due to resolution change")
+                        return
+
                     self._media = {
                         k: CachedMedia.from_dict(v)
                         for k, v in data.get("media", {}).items()
@@ -147,7 +177,11 @@ class CacheManager:
             try:
                 data = {
                     "media": {k: v.to_dict() for k, v in self._media.items()},
-                    "last_updated": datetime.now().isoformat()
+                    "last_updated": datetime.now().isoformat(),
+                    "settings": {
+                        "max_dimension": self.config.sync.max_dimension,
+                        "full_resolution": self.config.sync.full_resolution
+                    }
                 }
                 with open(self.metadata_path, 'w') as f:
                     json.dump(data, f, indent=2)
