@@ -237,7 +237,7 @@ class ImageProcessor:
             crop_height = 1.0
             crop_width = self.screen_aspect / img_aspect
         else:
-            # Image is taller - crop top/bottom
+            # Image is taller - crop top/bottom (portrait photos)
             crop_width = 1.0
             crop_height = img_aspect / self.screen_aspect
 
@@ -264,6 +264,10 @@ class ImageProcessor:
         """
         Position crop to keep faces visible and well-placed.
 
+        Faces are positioned at approximately 3/4 up from the bottom of the frame
+        (y=0.25 in normalized coordinates), which is aesthetically pleasing for
+        photos of people.
+
         Args:
             crop_width: Width of crop region (0-1).
             crop_height: Height of crop region (0-1).
@@ -273,55 +277,71 @@ class ImageProcessor:
             (x, y) position for crop region.
         """
         # Filter to significant faces only (ignore tiny background faces)
-        # A face should be at least 2% of image dimension to be considered
-        min_face_size = 0.02
+        # A face should be at least 3% of image dimension to be considered significant
+        min_face_size = 0.03
         significant_faces = [
             f for f in faces
             if f.width >= min_face_size or f.height >= min_face_size
         ]
 
-        # If no significant faces, use all faces or fallback
+        # If no significant faces, try slightly smaller threshold
         if not significant_faces:
-            significant_faces = faces
+            min_face_size = 0.02
+            significant_faces = [
+                f for f in faces
+                if f.width >= min_face_size or f.height >= min_face_size
+            ]
 
         if not significant_faces:
             return self._get_fallback_crop_position(crop_width, crop_height)
 
-        # Get face center (weighted by size)
-        face_center = get_faces_center(significant_faces)
-        if not face_center:
+        # Get bounding box of all significant faces
+        face_bbox = get_faces_bounding_box(significant_faces, margin=0.02)
+        if not face_bbox:
             return self._get_fallback_crop_position(crop_width, crop_height)
 
-        face_cx, face_cy = face_center
+        fb_x, fb_y, fb_w, fb_h = face_bbox
 
-        # Get face bounding box for significant faces only
-        face_bbox = get_faces_bounding_box(significant_faces, margin=0.05)
+        # Calculate the vertical center of the faces (top of heads to chin area)
+        # For better framing, use the upper portion of faces (eyes/forehead area)
+        face_top = fb_y
+        face_vertical_center = fb_y + fb_h * 0.4  # Focus on upper part of face region
 
-        # Use center positioning for better results (rule_of_thirds often crops badly)
-        # Position face center in the middle of the crop region
-        target_x = 0.5
-        target_y = 0.5
+        # Target position: faces should appear at 1/4 down from top (3/4 up from bottom)
+        # In frame coordinates, y=0.25 means 1/4 from top
+        target_y_in_frame = 0.25
 
-        # Calculate crop position to put face center at target position
-        crop_x = face_cx - target_x * crop_width
-        crop_y = face_cy - target_y * crop_height
+        # Calculate crop_y to position faces at target
+        # face_vertical_center should map to (crop_y + target_y_in_frame * crop_height)
+        # So: crop_y = face_vertical_center - target_y_in_frame * crop_height
+        crop_y = face_vertical_center - target_y_in_frame * crop_height
 
-        # Ensure significant faces are within crop region
-        if face_bbox:
-            fb_x, fb_y, fb_w, fb_h = face_bbox
+        # For X position: center the faces horizontally
+        face_cx = fb_x + fb_w / 2
+        crop_x = face_cx - 0.5 * crop_width
 
-            # Adjust if faces would be cropped (with small margin)
-            margin = 0.02
-            if fb_x < crop_x + margin:
-                crop_x = fb_x - margin
-            if fb_x + fb_w > crop_x + crop_width - margin:
-                crop_x = fb_x + fb_w - crop_width + margin
-            if fb_y < crop_y + margin:
-                crop_y = fb_y - margin
-            if fb_y + fb_h > crop_y + crop_height - margin:
-                crop_y = fb_y + fb_h - crop_height + margin
+        # Now ensure ALL significant faces fit within the crop region
+        # Add safety margin around the face bounding box
+        safety_margin = 0.02
 
-        # Clamp to valid range
+        # Check if faces would be cut off and adjust
+        # Top boundary: ensure face tops aren't cut
+        if fb_y < crop_y + safety_margin:
+            crop_y = fb_y - safety_margin
+
+        # Bottom boundary: ensure face bottoms aren't cut
+        if fb_y + fb_h > crop_y + crop_height - safety_margin:
+            crop_y = fb_y + fb_h - crop_height + safety_margin
+
+        # Left boundary
+        if fb_x < crop_x + safety_margin:
+            crop_x = fb_x - safety_margin
+
+        # Right boundary
+        if fb_x + fb_w > crop_x + crop_width - safety_margin:
+            crop_x = fb_x + fb_w - crop_width + safety_margin
+
+        # Clamp to valid range (crop must stay within image bounds)
         crop_x = max(0, min(1 - crop_width, crop_x))
         crop_y = max(0, min(1 - crop_height, crop_y))
 
