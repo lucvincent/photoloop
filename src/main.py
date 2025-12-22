@@ -338,8 +338,10 @@ class PhotoLoop:
                     self.display.set_mode(DisplayMode.SLIDESHOW)
 
                     # Check if we need to load a new photo
+                    # Only load new photo if duration complete AND no transition in progress
                     if (current_media is None or
-                        self.display.is_photo_duration_complete()):
+                        (self.display.is_photo_duration_complete() and
+                         self.display.is_transition_complete())):
 
                         # Get next media from cache
                         next_media = self.cache_manager.get_next_media()

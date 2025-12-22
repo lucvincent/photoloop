@@ -104,6 +104,7 @@ class Display:
         self._transitioning = False
         self._transition_start = 0
         self._transition_type = TransitionType.SLIDE_LEFT
+        self._transition_frames = 0
 
         # Ken Burns state
         self._kb_start_time = 0
@@ -280,6 +281,7 @@ class Display:
         self._next_texture = next_texture
         self._transitioning = True
         self._transition_start = time.time()
+        self._transition_frames = 0
 
         transition_type = self.config.display.transition_type
         if transition_type == "random":
@@ -325,7 +327,8 @@ class Display:
             if self._transitioning:
                 self._render_transition()
                 self._renderer.present()
-                time.sleep(1.0 / 60)  # 60fps during transitions
+                # vsync handles timing, no sleep needed
+                return True  # Continue animation loop
             elif needs_animation:
                 self._render_slideshow()
                 self._renderer.present()
@@ -389,6 +392,8 @@ class Display:
         elapsed = (time.time() - self._transition_start) * 1000
         duration = self.config.display.transition_duration_ms
         progress = min(1.0, elapsed / duration)
+
+        self._transition_frames += 1
 
         if progress >= 1.0:
             self._current_texture = self._next_texture
