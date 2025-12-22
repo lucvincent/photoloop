@@ -369,13 +369,11 @@ class PhotoLoop:
                         self.display.set_mode(DisplayMode.BLACK)
 
                 # Run display update (handles events, transitions, etc.)
+                # Note: display.update() includes clock.tick() for frame rate control
                 if not self.display.update():
                     # Display requested quit
                     logger.info("Display quit requested")
                     break
-
-                # Brief sleep to prevent CPU spinning
-                time.sleep(0.016)  # ~60fps max
 
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")

@@ -15,7 +15,7 @@ from PIL import Image
 
 from .cache_manager import CachedMedia
 from .config import PhotoLoopConfig, OverlayConfig
-from .image_processor import DisplayParams, ImageProcessor
+from .image_processor import DisplayParams, ImageProcessor, KenBurnsAnimation
 from .metadata import format_date
 
 logger = logging.getLogger(__name__)
@@ -96,6 +96,7 @@ class Display:
         self._next_surface: Optional[pygame.Surface] = None
         self._current_media: Optional[CachedMedia] = None
         self._current_params: Optional[DisplayParams] = None
+        self._needs_redraw = True  # Flag to track when display needs updating
 
         # Transition state
         self._transitioning = False
@@ -106,6 +107,9 @@ class Display:
         self._kb_start_time = 0
         self._kb_duration = config.display.photo_duration_seconds
         self._source_image: Optional[Image.Image] = None
+        self._source_surface: Optional[pygame.Surface] = None  # Pre-scaled for Ken Burns
+        self._kb_last_update = 0  # Last Ken Burns frame update time
+        self._kb_update_interval = 1.0 / 15  # Ken Burns at 15fps (smooth enough for slow motion)
 
         # Image processor
         self._processor = ImageProcessor(
@@ -123,9 +127,9 @@ class Display:
         # Fonts for overlay and clock
         self._init_fonts()
 
-        # Clock
+        # Clock - 10fps is enough for slow Ken Burns pan/zoom, saves significant CPU
         self.clock = pygame.time.Clock()
-        self.target_fps = 30
+        self.target_fps = 10
 
     def _init_fonts(self) -> None:
         """Initialize fonts for overlay and clock."""
@@ -175,31 +179,53 @@ class Display:
         self._current_media = media
         self._current_params = params
 
-        # Load source image for Ken Burns
+        # Load and prepare source image
         try:
-            self._source_image = Image.open(media.local_path)
-            if self._source_image.mode != "RGB":
-                self._source_image = self._source_image.convert("RGB")
+            pil_image = Image.open(media.local_path)
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
         except Exception as e:
             logger.error(f"Failed to load image {media.local_path}: {e}")
             return
 
-        # Get initial frame
-        if self.config.ken_burns.enabled and params.ken_burns:
-            frame = self._processor.get_ken_burns_frame(
-                self._source_image,
-                params.crop_region,
-                params.ken_burns,
-                0.0  # Start at beginning
+        # For Ken Burns: pre-scale image to a size suitable for real-time transforms
+        # We need extra pixels for zoom headroom (max zoom is typically 1.15)
+        if self.config.ken_burns.enabled and params.ken_burns and params.crop_region:
+            max_zoom = max(params.ken_burns.start_zoom, params.ken_burns.end_zoom)
+            # Scale factor: minimal headroom to reduce transform cost
+            # At 4K, every extra pixel costs CPU
+            kb_scale = max_zoom * 1.05  # Just 5% margin
+
+            # Apply crop region first, then scale up
+            crop = params.crop_region
+            img_w, img_h = pil_image.size
+            left = int(crop.x * img_w)
+            top = int(crop.y * img_h)
+            right = int((crop.x + crop.width) * img_w)
+            bottom = int((crop.y + crop.height) * img_h)
+            cropped = pil_image.crop((left, top, right, bottom))
+
+            # Scale to just slightly larger than screen for zoom headroom
+            # Use NEAREST for maximum speed (quality loss acceptable for motion)
+            target_w = int(self.screen_width * kb_scale)
+            target_h = int(self.screen_height * kb_scale)
+            self._source_image = cropped.resize(
+                (target_w, target_h),
+                Image.Resampling.NEAREST  # Fastest resampling
             )
+            self._source_surface = self._pil_to_pygame(self._source_image)
+
+            # Get initial frame using fast pygame scaling
+            next_surface = self._get_kb_frame_fast(params.ken_burns, 0.0)
         else:
+            # No Ken Burns - just prepare static image
+            self._source_image = None
+            self._source_surface = None
             frame = self._processor.prepare_image_for_display(
                 media.local_path,
                 params
             )
-
-        # Convert PIL to pygame
-        next_surface = self._pil_to_pygame(frame)
+            next_surface = self._pil_to_pygame(frame)
 
         if transition and self._current_surface is not None:
             self._start_transition(next_surface)
@@ -208,7 +234,83 @@ class Display:
             self._next_surface = None
 
         self._kb_start_time = time.time()
+        self._kb_last_update = 0  # Reset to force immediate first frame
         self._kb_duration = self.config.display.photo_duration_seconds
+        self._needs_redraw = True  # Force redraw for new photo
+
+    def _get_kb_frame_fast(
+        self,
+        animation: "KenBurnsAnimation",
+        progress: float
+    ) -> pygame.Surface:
+        """
+        Get Ken Burns frame using fast pygame transforms.
+
+        Args:
+            animation: Ken Burns animation parameters.
+            progress: Animation progress (0-1).
+
+        Returns:
+            pygame Surface for this frame.
+        """
+        if self._source_surface is None:
+            return self._current_surface
+
+        # Interpolate zoom
+        zoom = animation.start_zoom + (animation.end_zoom - animation.start_zoom) * progress
+
+        # Interpolate center with easing
+        eased = self._ease_in_out(progress)
+        cx = animation.start_center[0] + (animation.end_center[0] - animation.start_center[0]) * eased
+        cy = animation.start_center[1] + (animation.end_center[1] - animation.start_center[1]) * eased
+
+        # Source surface dimensions
+        src_w = self._source_surface.get_width()
+        src_h = self._source_surface.get_height()
+
+        # Calculate the region to extract (inverse of zoom)
+        # At zoom=1.0, we show the full source (which is already cropped)
+        # At zoom=1.15, we show less of the source (more zoomed in)
+        view_w = src_w / zoom
+        view_h = src_h / zoom
+
+        # Pan offset (normalized center to pixel coords)
+        # cx, cy are in 0-1 range relative to original crop region
+        # Map to source surface coordinates
+        center_x = cx * src_w
+        center_y = cy * src_h
+
+        # Calculate subsurface rect
+        left = int(center_x - view_w / 2)
+        top = int(center_y - view_h / 2)
+
+        # Clamp to valid range
+        left = max(0, min(src_w - int(view_w), left))
+        top = max(0, min(src_h - int(view_h), top))
+
+        # Extract subsurface and scale to screen
+        try:
+            rect = pygame.Rect(left, top, int(view_w), int(view_h))
+            subsurface = self._source_surface.subsurface(rect)
+            # Use scale (faster than smoothscale, acceptable quality for video-like motion)
+            return pygame.transform.scale(
+                subsurface,
+                (self.screen_width, self.screen_height)
+            )
+        except (ValueError, pygame.error) as e:
+            # Fallback if subsurface fails
+            logger.debug(f"Ken Burns subsurface error: {e}")
+            return pygame.transform.scale(
+                self._source_surface,
+                (self.screen_width, self.screen_height)
+            )
+
+    def _ease_in_out(self, t: float) -> float:
+        """Smooth ease-in-out for natural Ken Burns motion."""
+        if t < 0.5:
+            return 2 * t * t
+        else:
+            return 1 - pow(-2 * t + 2, 2) / 2
 
     def _pil_to_pygame(self, pil_image: Image.Image) -> pygame.Surface:
         """Convert PIL Image to pygame Surface."""
@@ -246,42 +348,70 @@ class Display:
         if "quit" in events:
             return False
 
+        # Check if we need to animate (Ken Burns or transition)
+        needs_animation = (
+            self._transitioning or
+            (self.mode == DisplayMode.SLIDESHOW and
+             self.config.ken_burns.enabled and
+             self._source_surface is not None)
+        )
+
         if self.mode == DisplayMode.BLACK:
-            self.screen.fill((0, 0, 0))
+            if self._needs_redraw:
+                self.screen.fill((0, 0, 0))
+                pygame.display.flip()
+                self._needs_redraw = False
+            # Sleep longer for static black screen
+            time.sleep(0.1)
 
         elif self.mode == DisplayMode.CLOCK:
+            # Clock updates every second
             self._render_clock()
+            pygame.display.flip()
+            time.sleep(1.0)  # Update once per second
 
         elif self.mode == DisplayMode.SLIDESHOW:
             if self._transitioning:
                 self._render_transition()
-            else:
+                pygame.display.flip()
+                time.sleep(1.0 / 30)  # 30fps for smooth transitions
+            elif needs_animation:
+                # Ken Burns animation
                 self._render_slideshow()
+                pygame.display.flip()
+                time.sleep(1.0 / self.target_fps)
+            else:
+                # Static image - only redraw when needed
+                if self._needs_redraw:
+                    self._render_slideshow()
+                    pygame.display.flip()
+                    self._needs_redraw = False
+                # Sleep longer for static images
+                time.sleep(0.1)
 
-        pygame.display.flip()
-        self.clock.tick(self.target_fps)
         return True
 
     def _render_slideshow(self) -> None:
         """Render the current slideshow frame."""
-        if self._source_image is None or self._current_params is None:
+        # If no Ken Burns source, just blit the static surface (no animation needed)
+        if self._source_surface is None or self._current_params is None:
             if self._current_surface:
                 self.screen.blit(self._current_surface, (0, 0))
+            # Render overlay
+            if self.config.overlay.enabled and self._current_media:
+                self._render_overlay()
             return
 
-        # Calculate Ken Burns progress
-        elapsed = time.time() - self._kb_start_time
+        # For Ken Burns: animate the frame
+        now = time.time()
+        elapsed = now - self._kb_start_time
         progress = min(1.0, elapsed / self._kb_duration)
 
         if self.config.ken_burns.enabled and self._current_params.ken_burns:
-            # Render Ken Burns frame
-            frame = self._processor.get_ken_burns_frame(
-                self._source_image,
-                self._current_params.crop_region,
+            self._current_surface = self._get_kb_frame_fast(
                 self._current_params.ken_burns,
                 progress
             )
-            self._current_surface = self._pil_to_pygame(frame)
 
         if self._current_surface:
             self.screen.blit(self._current_surface, (0, 0))
@@ -482,13 +612,19 @@ class Display:
 
     def show_black(self) -> None:
         """Show black screen."""
+        if self.mode != DisplayMode.BLACK:
+            self._needs_redraw = True
         self.mode = DisplayMode.BLACK
         self._source_image = None
+        self._source_surface = None
 
     def show_clock(self) -> None:
         """Show clock display."""
+        if self.mode != DisplayMode.CLOCK:
+            self._needs_redraw = True
         self.mode = DisplayMode.CLOCK
         self._source_image = None
+        self._source_surface = None
 
     def set_mode(self, mode: DisplayMode) -> None:
         """
@@ -502,6 +638,8 @@ class Display:
         elif mode == DisplayMode.CLOCK:
             self.show_clock()
         elif mode == DisplayMode.SLIDESHOW:
+            if self.mode != DisplayMode.SLIDESHOW:
+                self._needs_redraw = True
             self.mode = DisplayMode.SLIDESHOW
 
     def is_transition_complete(self) -> bool:
