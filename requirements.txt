@@ -9,6 +9,7 @@ flask>=3.0.0
 
 # Web scraping
 selenium>=4.15.0
+chromedriver-autoinstaller>=0.6.0  # Fallback if system chromedriver unavailable
 
 # Configuration
 pyyaml>=6.0

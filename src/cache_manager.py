@@ -110,7 +110,7 @@ class CacheManager:
         self._media: Dict[str, CachedMedia] = {}
 
         # Components
-        self._scraper = AlbumScraper(headless=True)
+        self._scraper = AlbumScraper(headless=True, timeout=120)
         self._face_detector: Optional[FaceDetector] = None
         self._metadata_extractor = MetadataExtractor()
         self._image_processor: Optional[ImageProcessor] = None
@@ -248,6 +248,9 @@ class CacheManager:
 
         # Scrape all configured albums
         all_items: List[MediaItem] = []
+        albums_scraped_successfully = 0
+        total_albums = sum(1 for a in self.config.albums if a.url)
+
         for album in self.config.albums:
             if not album.url:
                 continue
@@ -257,11 +260,12 @@ class CacheManager:
                 for item in items:
                     item.caption = item.caption  # Keep original caption
                 all_items.extend(items)
+                albums_scraped_successfully += 1
             except Exception as e:
                 logger.error(f"Failed to scrape album {album.url}: {e}")
                 stats["errors"] += 1
 
-        logger.info(f"Found {len(all_items)} items in albums")
+        logger.info(f"Found {len(all_items)} items in albums ({albums_scraped_successfully}/{total_albums} albums scraped)")
 
         # Track which URLs we've seen
         seen_urls: Set[str] = set()
@@ -323,11 +327,19 @@ class CacheManager:
                     else:
                         stats["errors"] += 1
 
-            # Mark items not seen as deleted
-            for media_id, cached in self._media.items():
-                if cached.url not in seen_urls and not cached.deleted:
-                    cached.deleted = True
-                    stats["deleted"] += 1
+            # Mark items not seen as deleted - but ONLY if we successfully scraped
+            # at least one album. This prevents marking everything as deleted when
+            # the scraper fails (e.g., ChromeDriver crash, network error).
+            if albums_scraped_successfully > 0:
+                for media_id, cached in self._media.items():
+                    if cached.url not in seen_urls and not cached.deleted:
+                        cached.deleted = True
+                        stats["deleted"] += 1
+            elif total_albums > 0:
+                logger.warning(
+                    f"Skipping deletion check: all {total_albums} album(s) failed to scrape. "
+                    "Existing cached items will be preserved."
+                )
 
             # Save metadata
             self._save_metadata()

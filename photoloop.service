@@ -12,9 +12,11 @@ Group=pi
 # Working directory
 WorkingDirectory=/opt/photoloop
 
-# Environment
-Environment=DISPLAY=:0
-Environment=SDL_VIDEODRIVER=x11
+# Environment - Wayland/labwc on Raspberry Pi OS Bookworm
+# Note: Assumes user has UID 1000 (default for first user on Pi)
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=SDL_VIDEODRIVER=wayland
 Environment=PHOTOLOOP_LOG_DIR=/var/log/photoloop
 Environment=PHOTOLOOP_API_URL=http://localhost:8080
 

@@ -141,7 +141,7 @@ class PhotoLoop:
         from .display import Display
 
         try:
-            self.display = Display(self.config, self.cache_manager)
+            self.display = Display(self.config)
             logger.info("Display engine initialized")
             return True
 
@@ -320,6 +320,7 @@ class PhotoLoop:
         from .display import DisplayMode
 
         last_state = None
+        current_media = None
 
         while self._running and not self._shutdown_event.is_set():
             try:
@@ -335,8 +336,33 @@ class PhotoLoop:
                 # Update display mode
                 if should_show:
                     self.display.set_mode(DisplayMode.SLIDESHOW)
+
+                    # Check if we need to load a new photo
+                    if (current_media is None or
+                        self.display.is_photo_duration_complete()):
+
+                        # Get next media from cache
+                        next_media = self.cache_manager.get_next_media()
+                        if next_media:
+                            # Compute display parameters
+                            params = self.cache_manager.get_display_params(
+                                next_media,
+                                self.display.screen_width,
+                                self.display.screen_height
+                            )
+                            # Show the photo
+                            self.display.show_photo(
+                                next_media,
+                                params,
+                                transition=(current_media is not None)
+                            )
+                            current_media = next_media
+                            logger.info(f"Displaying photo: {os.path.basename(next_media.local_path)}")
+                        elif current_media is None:
+                            logger.warning("No media available to display")
                 else:
                     # Off-hours mode
+                    current_media = None  # Reset so we load fresh when resuming
                     if self.config.schedule.off_hours_mode == 'clock':
                         self.display.set_mode(DisplayMode.CLOCK)
                     else:

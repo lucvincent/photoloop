@@ -75,11 +75,19 @@ class Display:
 
         logger.info(f"Display resolution: {self.screen_width}x{self.screen_height}")
 
-        # Create display
-        self.screen = pygame.display.set_mode(
-            (self.screen_width, self.screen_height),
-            pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
-        )
+        # Create display - check for windowed mode (useful for VNC)
+        windowed = os.environ.get("PHOTOLOOP_WINDOWED", "").lower() in ("1", "true", "yes")
+        if windowed:
+            logger.info("Running in windowed mode (PHOTOLOOP_WINDOWED set)")
+            self.screen = pygame.display.set_mode(
+                (self.screen_width, self.screen_height),
+                pygame.HWSURFACE | pygame.DOUBLEBUF
+            )
+        else:
+            self.screen = pygame.display.set_mode(
+                (self.screen_width, self.screen_height),
+                pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
+            )
         pygame.display.set_caption("PhotoLoop")
 
         # Current state
@@ -226,8 +234,18 @@ class Display:
 
         self._transition_type = TransitionType(transition_type)
 
-    def update(self) -> None:
-        """Update the display for the current frame."""
+    def update(self) -> bool:
+        """
+        Update the display for the current frame.
+
+        Returns:
+            True to continue running, False to quit.
+        """
+        # Handle events first
+        events = self.handle_events()
+        if "quit" in events:
+            return False
+
         if self.mode == DisplayMode.BLACK:
             self.screen.fill((0, 0, 0))
 
@@ -242,6 +260,7 @@ class Display:
 
         pygame.display.flip()
         self.clock.tick(self.target_fps)
+        return True
 
     def _render_slideshow(self) -> None:
         """Render the current slideshow frame."""
@@ -470,6 +489,20 @@ class Display:
         """Show clock display."""
         self.mode = DisplayMode.CLOCK
         self._source_image = None
+
+    def set_mode(self, mode: DisplayMode) -> None:
+        """
+        Set the display mode.
+
+        Args:
+            mode: DisplayMode to set.
+        """
+        if mode == DisplayMode.BLACK:
+            self.show_black()
+        elif mode == DisplayMode.CLOCK:
+            self.show_clock()
+        elif mode == DisplayMode.SLIDESHOW:
+            self.mode = DisplayMode.SLIDESHOW
 
     def is_transition_complete(self) -> bool:
         """Check if current transition is complete."""

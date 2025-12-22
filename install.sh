@@ -22,7 +22,15 @@ INSTALL_DIR="/opt/photoloop"
 CONFIG_DIR="/etc/photoloop"
 CACHE_DIR="/var/lib/photoloop"
 LOG_DIR="/var/log/photoloop"
-SERVICE_USER="pi"
+
+# Auto-detect the user who invoked sudo, or fall back to 'pi'
+if [ -n "$SUDO_USER" ]; then
+    SERVICE_USER="$SUDO_USER"
+elif [ -n "$USER" ] && [ "$USER" != "root" ]; then
+    SERVICE_USER="$USER"
+else
+    SERVICE_USER="pi"
+fi
 
 echo -e "${GREEN}"
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -49,6 +57,7 @@ echo "  - Installation directory: $INSTALL_DIR"
 echo "  - Configuration: $CONFIG_DIR/config.yaml"
 echo "  - Photo cache: $CACHE_DIR/cache/"
 echo "  - Logs: $LOG_DIR/"
+echo "  - Service user: $SERVICE_USER"
 echo ""
 read -p "Continue with installation? [Y/n] " -n 1 -r
 echo ""
@@ -64,14 +73,12 @@ echo -e "${YELLOW}[1/7] Installing system dependencies...${NC}"
 # Update package list
 apt-get update
 
-# Install required packages
+# Install required packages (excluding chromium for now)
 apt-get install -y \
     python3 \
     python3-pip \
     python3-venv \
     python3-pygame \
-    chromium-browser \
-    chromium-chromedriver \
     libsdl2-dev \
     libsdl2-image-dev \
     libsdl2-mixer-dev \
@@ -80,6 +87,70 @@ apt-get install -y \
     libavformat-dev \
     libswscale-dev \
     fonts-dejavu-core
+
+# Install Chromium - package name varies by OS version
+# Raspberry Pi OS Bookworm (Debian 12+) uses 'chromium'
+# Older versions use 'chromium-browser'
+echo -e "${YELLOW}Installing Chromium browser...${NC}"
+if apt-cache show chromium &>/dev/null; then
+    apt-get install -y chromium
+    echo -e "${GREEN}Installed 'chromium' package.${NC}"
+elif apt-cache show chromium-browser &>/dev/null; then
+    apt-get install -y chromium-browser
+    echo -e "${GREEN}Installed 'chromium-browser' package.${NC}"
+else
+    echo -e "${RED}Warning: Could not find chromium package. Please install manually.${NC}"
+fi
+
+# Install ChromeDriver - try multiple approaches
+echo -e "${YELLOW}Installing ChromeDriver...${NC}"
+CHROMEDRIVER_INSTALLED=false
+
+# Method 1: Try chromium-chromedriver package (older systems)
+if apt-cache show chromium-chromedriver &>/dev/null; then
+    apt-get install -y chromium-chromedriver
+    CHROMEDRIVER_INSTALLED=true
+fi
+
+# Method 2: Try chromium-driver package (Debian Bookworm)
+if [ "$CHROMEDRIVER_INSTALLED" = false ] && apt-cache show chromium-driver &>/dev/null; then
+    apt-get install -y chromium-driver
+    CHROMEDRIVER_INSTALLED=true
+fi
+
+# Method 3: Check if chromedriver is bundled with chromium
+if [ "$CHROMEDRIVER_INSTALLED" = false ]; then
+    if command -v chromedriver &>/dev/null; then
+        echo -e "${GREEN}ChromeDriver found (bundled with Chromium).${NC}"
+        CHROMEDRIVER_INSTALLED=true
+    elif [ -f /usr/lib/chromium/chromedriver ]; then
+        # Create symlink if chromedriver exists but isn't in PATH
+        ln -sf /usr/lib/chromium/chromedriver /usr/local/bin/chromedriver
+        echo -e "${GREEN}ChromeDriver symlink created.${NC}"
+        CHROMEDRIVER_INSTALLED=true
+    elif [ -f /usr/lib/chromium-browser/chromedriver ]; then
+        ln -sf /usr/lib/chromium-browser/chromedriver /usr/local/bin/chromedriver
+        echo -e "${GREEN}ChromeDriver symlink created.${NC}"
+        CHROMEDRIVER_INSTALLED=true
+    fi
+fi
+
+if [ "$CHROMEDRIVER_INSTALLED" = false ]; then
+    echo -e "${YELLOW}Warning: ChromeDriver not found in packages.${NC}"
+    echo -e "${YELLOW}Attempting to download ChromeDriver...${NC}"
+
+    # Get Chromium version
+    if command -v chromium &>/dev/null; then
+        CHROME_VERSION=$(chromium --version | grep -oP '\d+' | head -1)
+    elif command -v chromium-browser &>/dev/null; then
+        CHROME_VERSION=$(chromium-browser --version | grep -oP '\d+' | head -1)
+    fi
+
+    if [ -n "$CHROME_VERSION" ]; then
+        echo -e "${YELLOW}Note: You may need to manually install ChromeDriver for Chromium $CHROME_VERSION${NC}"
+        echo -e "${YELLOW}Try: pip install chromedriver-autoinstaller (installed in venv later)${NC}"
+    fi
+fi
 
 echo -e "${GREEN}System dependencies installed.${NC}"
 
@@ -196,6 +267,11 @@ echo -e "${YELLOW}[6/7] Installing systemd service...${NC}"
 
 # Copy service file
 cp "$SCRIPT_DIR/photoloop.service" /etc/systemd/system/photoloop.service
+
+# Update the service file with the correct user
+sed -i "s/^User=.*/User=$SERVICE_USER/" /etc/systemd/system/photoloop.service
+sed -i "s/^Group=.*/Group=$SERVICE_USER/" /etc/systemd/system/photoloop.service
+echo -e "${GREEN}Service configured to run as user: $SERVICE_USER${NC}"
 
 # Reload systemd
 systemctl daemon-reload

@@ -83,21 +83,59 @@ class AlbumScraper:
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
 
+        # Common chromedriver paths on different systems
+        chromedriver_paths = [
+            "/usr/bin/chromedriver",
+            "/usr/local/bin/chromedriver",
+            "/usr/lib/chromium/chromedriver",
+            "/usr/lib/chromium-browser/chromedriver",
+            "/snap/bin/chromium.chromedriver",
+        ]
+
+        driver = None
+        last_error = None
+
+        # Method 1: Try default (let Selenium find chromedriver)
         try:
-            # Try default Chrome/Chromium
             driver = webdriver.Chrome(options=options)
-        except WebDriverException:
-            # Try with explicit chromedriver path (Raspberry Pi)
+        except WebDriverException as e:
+            last_error = e
+            logger.debug(f"Default chromedriver not found: {e}")
+
+        # Method 2: Try known paths
+        if driver is None:
+            for path in chromedriver_paths:
+                try:
+                    service = Service(path)
+                    driver = webdriver.Chrome(service=service, options=options)
+                    logger.info(f"Using chromedriver from: {path}")
+                    break
+                except WebDriverException as e:
+                    last_error = e
+                    continue
+
+        # Method 3: Try chromedriver-autoinstaller as fallback
+        if driver is None:
             try:
-                service = Service("/usr/bin/chromedriver")
-                driver = webdriver.Chrome(service=service, options=options)
-            except WebDriverException as e:
-                logger.error(f"Failed to initialize Chrome driver: {e}")
-                raise RuntimeError(
-                    "Could not initialize Chrome WebDriver. "
-                    "Ensure chromium-browser and chromium-chromedriver are installed: "
-                    "sudo apt install chromium-browser chromium-chromedriver"
-                )
+                import chromedriver_autoinstaller
+                chromedriver_autoinstaller.install()
+                driver = webdriver.Chrome(options=options)
+                logger.info("Using chromedriver from chromedriver-autoinstaller")
+            except ImportError:
+                logger.debug("chromedriver-autoinstaller not available")
+            except Exception as e:
+                last_error = e
+                logger.debug(f"chromedriver-autoinstaller failed: {e}")
+
+        if driver is None:
+            logger.error(f"Failed to initialize Chrome driver: {last_error}")
+            raise RuntimeError(
+                "Could not initialize Chrome WebDriver. "
+                "Ensure Chromium and chromedriver are installed. Try:\n"
+                "  sudo apt install chromium chromium-driver\n"
+                "or for older systems:\n"
+                "  sudo apt install chromium-browser chromium-chromedriver"
+            )
 
         driver.set_page_load_timeout(self.timeout)
         return driver
