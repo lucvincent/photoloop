@@ -82,7 +82,7 @@ class FaceDetector:
     def __init__(
         self,
         model_path: str = None,
-        confidence_threshold: float = 0.7,
+        confidence_threshold: float = 0.5,
         nms_threshold: float = 0.3,
         top_k: int = 50
     ):
