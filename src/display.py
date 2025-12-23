@@ -175,11 +175,18 @@ class Display:
 
         # Create texture from surface
         texture = sdl2.Texture.from_surface(self._renderer, surface)
+
+        # Enable alpha blending for fade transitions
+        # blend_mode: 0=none, 1=blend, 2=add, 4=mod
+        texture.blend_mode = 1
+
         return texture
 
     def _surface_to_texture(self, surface: pygame.Surface) -> sdl2.Texture:
         """Convert pygame Surface to SDL2 Texture."""
-        return sdl2.Texture.from_surface(self._renderer, surface)
+        texture = sdl2.Texture.from_surface(self._renderer, surface)
+        texture.blend_mode = 1  # Enable alpha blending
+        return texture
 
     def show_photo(
         self,
