@@ -29,6 +29,37 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class SyncProgress:
+    """Tracks the current sync progress for UI display."""
+    is_syncing: bool = False
+    stage: str = ""  # "idle", "scraping", "downloading", "complete", "error"
+    album_name: str = ""
+    albums_done: int = 0
+    albums_total: int = 0
+    urls_found: int = 0
+    downloads_done: int = 0
+    downloads_total: int = 0
+    error_message: str = ""
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "is_syncing": self.is_syncing,
+            "stage": self.stage,
+            "album_name": self.album_name,
+            "albums_done": self.albums_done,
+            "albums_total": self.albums_total,
+            "urls_found": self.urls_found,
+            "downloads_done": self.downloads_done,
+            "downloads_total": self.downloads_total,
+            "error_message": self.error_message,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+        }
+
+
+@dataclass
 class CachedMedia:
     """Metadata for a cached media item."""
     media_id: str                    # Hash of original URL
@@ -105,12 +136,17 @@ class CacheManager:
 
         # Thread safety
         self._lock = threading.RLock()
+        self._sync_lock = threading.Lock()  # Prevent concurrent syncs
 
         # In-memory cache of metadata
         self._media: Dict[str, CachedMedia] = {}
 
+        # Sync progress tracking
+        self._sync_progress = SyncProgress()
+
         # Components
         self._scraper = AlbumScraper(headless=True, timeout=120)
+        self._scraper.set_progress_callback(self._on_scraper_progress)
         self._face_detector: Optional[FaceDetector] = None
         self._metadata_extractor = MetadataExtractor()
         self._image_processor: Optional[ImageProcessor] = None
@@ -187,6 +223,20 @@ class CacheManager:
                     json.dump(data, f, indent=2)
             except Exception as e:
                 logger.error(f"Failed to save metadata: {e}")
+
+    def _on_scraper_progress(self, stage: str, current: int, total: int) -> None:
+        """Callback from album scraper to update progress."""
+        self._sync_progress.urls_found = current
+        if stage == "loading":
+            self._sync_progress.stage = "scraping"
+        elif stage == "scrolling":
+            self._sync_progress.stage = "scraping"
+        elif stage == "complete":
+            self._sync_progress.stage = "scraping"
+
+    def get_sync_progress(self) -> SyncProgress:
+        """Get current sync progress for UI display."""
+        return self._sync_progress
 
     def _get_media_id(self, url: str) -> str:
         """Generate a stable ID for a media URL."""
@@ -275,7 +325,28 @@ class CacheManager:
         """
         stats = {"new": 0, "updated": 0, "deleted": 0, "unchanged": 0, "errors": 0}
 
+        # Prevent concurrent syncs
+        if not self._sync_lock.acquire(blocking=False):
+            logger.warning("Sync already in progress, skipping")
+            return stats
+
+        try:
+            return self._do_sync(force_full)
+        finally:
+            self._sync_lock.release()
+
+    def _do_sync(self, force_full: bool = False) -> Dict[str, int]:
+        """Internal sync implementation."""
+        stats = {"new": 0, "updated": 0, "deleted": 0, "unchanged": 0, "errors": 0}
+
         logger.info("Starting album sync...")
+
+        # Initialize sync progress
+        self._sync_progress = SyncProgress(
+            is_syncing=True,
+            stage="scraping",
+            started_at=datetime.now().isoformat()
+        )
 
         # Get current time for last_seen
         now = datetime.now().isoformat()
@@ -284,25 +355,44 @@ class CacheManager:
         all_items: List[MediaItem] = []
         albums_scraped_successfully = 0
         total_albums = sum(1 for a in self.config.albums if a.url)
+        self._sync_progress.albums_total = total_albums
 
         for album in self.config.albums:
             if not album.url:
                 continue
             try:
-                logger.info(f"Scraping album: {album.name or album.url}")
+                album_name = album.name or album.url
+                logger.info(f"Scraping album: {album_name}")
+                self._sync_progress.album_name = album_name
+                self._sync_progress.urls_found = 0
+
                 items = self._scraper.scrape_album(album.url)
                 for item in items:
                     item.caption = item.caption  # Keep original caption
                 all_items.extend(items)
                 albums_scraped_successfully += 1
+                self._sync_progress.albums_done = albums_scraped_successfully
             except Exception as e:
                 logger.error(f"Failed to scrape album {album.url}: {e}")
                 stats["errors"] += 1
+                self._sync_progress.error_message = str(e)
 
         logger.info(f"Found {len(all_items)} items in albums ({albums_scraped_successfully}/{total_albums} albums scraped)")
+        self._sync_progress.urls_found = len(all_items)
 
         # Track which URLs we've seen
         seen_urls: Set[str] = set()
+
+        # Calculate how many need downloading
+        items_to_download = 0
+        for item in all_items:
+            media_id = self._get_media_id(item.url)
+            if media_id not in self._media or force_full:
+                items_to_download += 1
+
+        self._sync_progress.stage = "downloading"
+        self._sync_progress.downloads_total = items_to_download
+        self._sync_progress.downloads_done = 0
 
         with self._lock:
             for item in all_items:
@@ -358,8 +448,10 @@ class CacheManager:
                         )
                         self._media[media_id] = cached
                         stats["new"] += 1
+                        self._sync_progress.downloads_done += 1
                     else:
                         stats["errors"] += 1
+                        self._sync_progress.downloads_done += 1
 
             # Mark items not seen as deleted - but ONLY if we successfully scraped
             # at least one album. This prevents marking everything as deleted when
@@ -389,6 +481,11 @@ class CacheManager:
             f"{stats['deleted']} deleted, {stats['unchanged']} unchanged, "
             f"{stats['errors']} errors"
         )
+
+        # Mark sync as complete
+        self._sync_progress.is_syncing = False
+        self._sync_progress.stage = "complete"
+        self._sync_progress.completed_at = datetime.now().isoformat()
 
         return stats
 

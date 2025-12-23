@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Set
+from typing import Callable, List, Optional, Set
 from urllib.parse import urlparse, urljoin
 
 from selenium import webdriver
@@ -49,17 +49,34 @@ class AlbumScraper:
     GOOGLE_IMAGE_CDN = "lh3.googleusercontent.com"
     GOOGLE_PHOTO_CDN = "photos.fife.usercontent.google.com"
 
-    def __init__(self, headless: bool = True, timeout: int = 30):
+    def __init__(self, headless: bool = True, timeout: int = 30,
+                 progress_callback: Optional[Callable[[str, int, int], None]] = None):
         """
         Initialize the scraper.
 
         Args:
             headless: Run browser in headless mode (no GUI).
             timeout: Page load timeout in seconds.
+            progress_callback: Optional callback(stage, current, total) for progress updates.
+                              stage: "loading", "scrolling", "extracting"
+                              current/total: progress numbers (e.g., URLs found)
         """
         self.headless = headless
         self.timeout = timeout
         self._driver: Optional[webdriver.Chrome] = None
+        self._progress_callback = progress_callback
+
+    def set_progress_callback(self, callback: Optional[Callable[[str, int, int], None]]) -> None:
+        """Set or update the progress callback."""
+        self._progress_callback = callback
+
+    def _report_progress(self, stage: str, current: int = 0, total: int = 0) -> None:
+        """Report progress via callback if set."""
+        if self._progress_callback:
+            try:
+                self._progress_callback(stage, current, total)
+            except Exception:
+                pass  # Don't let callback errors break scraping
 
     def _init_driver(self) -> webdriver.Chrome:
         """Initialize Chrome WebDriver with appropriate options."""
@@ -236,6 +253,7 @@ class AlbumScraper:
         # Extract URLs captured during initial load
         extract_from_performance_logs()
         logger.info(f"Initial extraction: {len(collected_urls)} URLs")
+        self._report_progress("scrolling", len(collected_urls), scroll_height)
 
         # Scroll through the container
         scroll_position = 0
@@ -272,6 +290,7 @@ class AlbumScraper:
                 progress_pct = min(100, int(scroll_position / scroll_height * 100))
                 logger.info(f"Progress: {progress_pct}% scrolled, {total_urls} URLs collected")
                 last_progress_log = total_urls
+                self._report_progress("scrolling", total_urls, scroll_height)
 
             # Check if scroll height changed (more content loaded)
             new_height = driver.execute_script("return arguments[0].scrollHeight", scroll_container)
@@ -464,6 +483,7 @@ class AlbumScraper:
             List of MediaItem objects.
         """
         logger.info(f"Scraping album: {album_url}")
+        self._report_progress("loading", 0, 0)
 
         driver = None
         try:
@@ -519,6 +539,7 @@ class AlbumScraper:
             captions = self._extract_captions(driver)
 
             logger.info(f"Found {len(urls)} media URLs")
+            self._report_progress("complete", len(urls), len(urls))
 
             # Convert to MediaItem objects
             items = []

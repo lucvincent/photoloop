@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PhotoLoop Settings</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -45,7 +51,14 @@
             <div class="sync-section">
                 <h3>Album Sync</h3>
                 <button id="btn-sync" class="btn btn-primary">Sync Now</button>
-                <span id="sync-status"></span>
+            </div>
+            <div id="sync-progress" style="display: none; margin-top: 15px; padding: 15px; background: #16213e; border-radius: 8px; border: 1px solid #333;">
+                <div id="sync-stage" style="font-weight: bold; margin-bottom: 10px; color: #4fc3f7;">Starting sync...</div>
+                <div id="sync-details" style="font-size: 14px; color: #aaa;"></div>
+                <div style="margin-top: 10px; background: #0a1628; border-radius: 4px; height: 20px; overflow: hidden;">
+                    <div id="sync-progress-bar" style="background: #4CAF50; height: 100%; width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <div id="sync-progress-text" style="text-align: center; margin-top: 5px; font-size: 12px; color: #81d4fa;"></div>
             </div>
         </section>
 
@@ -181,12 +194,12 @@
                 <p><strong>Videos:</strong> <span id="video-count-detail">-</span></p>
             </div>
 
-            <h3>Cached Photos</h3>
-            <div id="photo-grid" class="photo-grid">
+            <h3>Cached Photos <span id="photo-grid-count" style="font-weight: normal; font-size: 14px; color: #81d4fa;"></span></h3>
+            <div id="photo-grid" class="photo-grid" style="max-height: 500px; overflow-y: auto; border: 1px solid #333; border-radius: 8px; padding: 10px; background: #16213e;">
                 <!-- Thumbnails will be loaded here -->
             </div>
 
-            <button id="btn-clear-cache" class="btn btn-danger">Clear Cache</button>
+            <button id="btn-clear-cache" class="btn btn-danger" style="margin-top: 15px;">Clear Cache</button>
         </section>
     </div>
 
@@ -299,32 +312,139 @@
             apiCall('/api/control/next', 'POST');
         });
 
+        // Sync progress polling
+        let syncPollInterval = null;
+
+        async function updateSyncProgress() {
+            try {
+                const progress = await apiCall('/api/sync/status');
+                const progressDiv = document.getElementById('sync-progress');
+                const stageDiv = document.getElementById('sync-stage');
+                const detailsDiv = document.getElementById('sync-details');
+                const progressBar = document.getElementById('sync-progress-bar');
+                const progressText = document.getElementById('sync-progress-text');
+                const syncBtn = document.getElementById('btn-sync');
+
+                if (progress.is_syncing) {
+                    progressDiv.style.display = 'block';
+                    syncBtn.disabled = true;
+                    syncBtn.textContent = 'Syncing...';
+
+                    if (progress.stage === 'scraping') {
+                        stageDiv.textContent = `Scraping album: ${progress.album_name || 'Loading...'}`;
+                        detailsDiv.textContent = `Found ${progress.urls_found} photos so far...`;
+                        // Indeterminate progress during scraping
+                        progressBar.style.width = '100%';
+                        progressBar.style.background = 'linear-gradient(90deg, #4CAF50 25%, #8BC34A 50%, #4CAF50 75%)';
+                        progressBar.style.backgroundSize = '200% 100%';
+                        progressBar.style.animation = 'shimmer 1.5s infinite';
+                        progressText.textContent = `Album ${progress.albums_done}/${progress.albums_total}`;
+                    } else if (progress.stage === 'downloading') {
+                        stageDiv.textContent = 'Downloading photos...';
+                        const pct = progress.downloads_total > 0
+                            ? Math.round((progress.downloads_done / progress.downloads_total) * 100)
+                            : 0;
+                        detailsDiv.textContent = `${progress.downloads_done} of ${progress.downloads_total} new photos`;
+                        progressBar.style.width = pct + '%';
+                        progressBar.style.background = '#4CAF50';
+                        progressBar.style.animation = 'none';
+                        progressText.textContent = pct + '%';
+                    }
+                } else if (progress.stage === 'complete') {
+                    stageDiv.textContent = 'Sync complete!';
+                    detailsDiv.textContent = `Found ${progress.urls_found} photos total`;
+                    progressBar.style.width = '100%';
+                    progressBar.style.background = '#4CAF50';
+                    progressBar.style.animation = 'none';
+                    progressText.textContent = '100%';
+                    syncBtn.disabled = false;
+                    syncBtn.textContent = 'Sync Now';
+
+                    // Hide progress after 3 seconds
+                    setTimeout(() => {
+                        progressDiv.style.display = 'none';
+                        loadStatus();
+                    }, 3000);
+
+                    // Stop polling
+                    if (syncPollInterval) {
+                        clearInterval(syncPollInterval);
+                        syncPollInterval = null;
+                    }
+                } else {
+                    // Idle state
+                    progressDiv.style.display = 'none';
+                    syncBtn.disabled = false;
+                    syncBtn.textContent = 'Sync Now';
+                    if (syncPollInterval) {
+                        clearInterval(syncPollInterval);
+                        syncPollInterval = null;
+                    }
+                }
+            } catch (e) {
+                console.error('Error polling sync status:', e);
+            }
+        }
+
         // Sync button
         document.getElementById('btn-sync').addEventListener('click', async () => {
-            document.getElementById('sync-status').textContent = 'Syncing...';
+            const progressDiv = document.getElementById('sync-progress');
+            const stageDiv = document.getElementById('sync-stage');
+            const detailsDiv = document.getElementById('sync-details');
+            const progressBar = document.getElementById('sync-progress-bar');
+
+            // Show progress immediately
+            progressDiv.style.display = 'block';
+            stageDiv.textContent = 'Starting sync...';
+            detailsDiv.textContent = '';
+            progressBar.style.width = '0%';
+
+            document.getElementById('btn-sync').disabled = true;
+            document.getElementById('btn-sync').textContent = 'Syncing...';
+
             await apiCall('/api/sync', 'POST');
-            document.getElementById('sync-status').textContent = 'Sync started';
-            setTimeout(() => {
-                document.getElementById('sync-status').textContent = '';
-                loadStatus();
-            }, 2000);
+
+            // Start polling for progress
+            if (!syncPollInterval) {
+                syncPollInterval = setInterval(updateSyncProgress, 1000);
+            }
         });
+
+        // Check sync status on page load and start polling if sync is in progress
+        async function checkInitialSyncStatus() {
+            try {
+                const progress = await apiCall('/api/sync/status');
+                if (progress.is_syncing && !syncPollInterval) {
+                    // Sync is already running, start polling
+                    syncPollInterval = setInterval(updateSyncProgress, 1000);
+                }
+                updateSyncProgress();
+            } catch (e) {
+                console.error('Error checking initial sync status:', e);
+            }
+        }
+        checkInitialSyncStatus();
 
         // Load photos
         async function loadPhotos() {
             const photos = await apiCall('/api/photos');
             const grid = document.getElementById('photo-grid');
+            const countSpan = document.getElementById('photo-grid-count');
             grid.innerHTML = '';
-            photos.slice(0, 20).forEach(photo => {
-                if (photo.type === 'photo') {
-                    const div = document.createElement('div');
-                    div.className = 'photo-thumb';
-                    div.innerHTML = `
-                        <img src="/api/photos/${photo.id}/thumbnail" alt="${photo.caption || ''}">
-                        <span>${photo.caption || photo.date || ''}</span>
-                    `;
-                    grid.appendChild(div);
-                }
+
+            const photoItems = photos.filter(p => p.type === 'photo');
+            countSpan.textContent = `(${photoItems.length} photos)`;
+
+            photoItems.forEach(photo => {
+                const div = document.createElement('div');
+                div.className = 'photo-thumb';
+                div.innerHTML = `
+                    <img src="/api/photos/${photo.id}/thumbnail"
+                         alt="${photo.caption || ''}"
+                         loading="lazy">
+                    <span>${photo.caption || photo.date || ''}</span>
+                `;
+                grid.appendChild(div);
             });
         }
 

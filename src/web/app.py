@@ -189,6 +189,19 @@ def create_app(
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    @app.route('/api/sync/status')
+    def api_sync_status():
+        """Get current sync progress."""
+        if app.cache_manager:
+            progress = app.cache_manager.get_sync_progress()
+            return jsonify(progress.to_dict())
+        else:
+            return jsonify({
+                "is_syncing": False,
+                "stage": "idle",
+                "error_message": "Cache manager not available"
+            })
+
     @app.route('/api/control/<action>', methods=['POST'])
     def api_control(action: str):
         """Control the slideshow."""
@@ -231,20 +244,42 @@ def create_app(
                 "date": m.exif_date,
                 "path": m.local_path
             }
-            for m in media[:100]  # Limit to 100
+            for m in media  # Return all photos
         ])
 
     @app.route('/api/photos/<media_id>/thumbnail')
     def api_photo_thumbnail(media_id: str):
-        """Get photo thumbnail."""
+        """Get photo thumbnail (200px, cached)."""
         if not app.cache_manager:
             return "Not found", 404
 
         for m in app.cache_manager.get_all_media():
             if m.media_id == media_id:
-                if os.path.exists(m.local_path):
-                    from flask import send_file
-                    return send_file(m.local_path, mimetype='image/jpeg')
+                if not os.path.exists(m.local_path):
+                    continue
+
+                # Check for cached thumbnail
+                thumb_dir = os.path.join(app.cache_manager.cache_dir, 'thumbnails')
+                thumb_path = os.path.join(thumb_dir, f"{media_id}_thumb.jpg")
+
+                if not os.path.exists(thumb_path):
+                    # Generate thumbnail
+                    try:
+                        os.makedirs(thumb_dir, exist_ok=True)
+                        from PIL import Image
+                        with Image.open(m.local_path) as img:
+                            img.thumbnail((200, 200))
+                            img.save(thumb_path, "JPEG", quality=70)
+                    except Exception as e:
+                        logger.error(f"Error generating thumbnail: {e}")
+                        # Fall back to original
+                        from flask import send_file
+                        return send_file(m.local_path, mimetype='image/jpeg')
+
+                from flask import send_file
+                response = send_file(thumb_path, mimetype='image/jpeg')
+                response.headers['Cache-Control'] = 'public, max-age=86400'  # Cache 1 day
+                return response
 
         return "Not found", 404
 
