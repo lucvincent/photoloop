@@ -87,7 +87,8 @@ apt-get install -y \
     libavformat-dev \
     libswscale-dev \
     fonts-dejavu-core \
-    cec-utils
+    cec-utils \
+    ddcutil
 
 # Install Chromium - package name varies by OS version
 # Raspberry Pi OS Bookworm (Debian 12+) uses 'chromium'

@@ -48,11 +48,13 @@ src/
 - Confidence threshold: 0.6
 
 ### Display Power Control
-- Uses HDMI-CEC to control TV power during off-hours
-- Requires `cec-utils` package (installed by install.sh)
-- When `off_hours_mode: "black"`, TV receives CEC standby command
-- When `off_hours_mode: "clock"`, TV stays on showing time/date
-- Falls back gracefully if CEC not available (just shows black screen)
+- Controls TV/monitor power during off-hours to save electricity
+- Tries multiple methods in order:
+  1. **DDC/CI** (for monitors) - uses `ddcutil` package - tried first
+  2. **HDMI-CEC** (for TVs) - uses `cec-utils` package
+  3. Falls back to black screen if neither available
+- When `off_hours_mode: "black"`, display powers off
+- When `off_hours_mode: "clock"`, display stays on showing time/date
 
 ## Commands
 

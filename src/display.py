@@ -597,22 +597,44 @@ class Display:
 
     def _set_display_power(self, on: bool) -> None:
         """
-        Control physical display power via HDMI-CEC.
+        Control physical display power.
 
-        Uses cec-client to send standby/wake commands to the TV.
-        If CEC is not available, just logs the state change.
-        Note: Many modern TVs will enter standby automatically when
-        receiving an all-black signal for a period of time.
+        Tries multiple methods in order:
+        1. DDC/CI (for monitors) - uses ddcutil - tried first as more reliable
+        2. HDMI-CEC (for TVs) - uses cec-client
+        3. Falls back to just showing black screen
 
         Args:
             on: True to turn display on, False to turn off.
         """
         self._display_powered = on
 
-        # Try HDMI-CEC if available
+        # Method 1: Try DDC/CI (for monitors) - most reliable for computer monitors
+        # VCP code 0xD6 = Power mode: 1=on, 4=off/standby
+        try:
+            power_value = '1' if on else '4'
+            result = subprocess.run(
+                ['ddcutil', 'setvcp', 'd6', power_value],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0:
+                logger.info(f"Display power {'on' if on else 'off'} (DDC)")
+                return
+            else:
+                logger.debug(f"ddcutil failed: {result.stderr}")
+        except FileNotFoundError:
+            logger.debug("ddcutil not available")
+        except subprocess.TimeoutExpired:
+            logger.debug("ddcutil timed out")
+        except Exception as e:
+            logger.debug(f"DDC error: {e}")
+
+        # Method 2: Try HDMI-CEC (for TVs)
         try:
             if on:
-                # Wake up TV: "on 0" sends power on to TV (device 0)
                 result = subprocess.run(
                     ['cec-client', '-s', '-d', '1'],
                     input='on 0\n',
@@ -621,7 +643,6 @@ class Display:
                     timeout=10
                 )
             else:
-                # Put TV in standby: "standby 0" sends standby to TV
                 result = subprocess.run(
                     ['cec-client', '-s', '-d', '1'],
                     input='standby 0\n',
@@ -636,13 +657,13 @@ class Display:
             else:
                 logger.debug(f"cec-client failed: {result.stderr}")
         except FileNotFoundError:
-            logger.debug("cec-client not available - install cec-utils for TV power control")
+            logger.debug("cec-client not available")
         except subprocess.TimeoutExpired:
-            logger.warning("cec-client timed out")
+            logger.debug("cec-client timed out")
         except Exception as e:
             logger.debug(f"CEC error: {e}")
 
-        # Log state for awareness (black screen still saves power on many displays)
+        # Fallback: just log (black screen still saves some power on many displays)
         if on:
             logger.info("Display resumed (no hardware power control available)")
         else:
