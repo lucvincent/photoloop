@@ -47,6 +47,13 @@ src/
 - Model file: models/face_detection_yunet_2023mar.onnx
 - Confidence threshold: 0.6
 
+### Display Power Control
+- Uses HDMI-CEC to control TV power during off-hours
+- Requires `cec-utils` package (installed by install.sh)
+- When `off_hours_mode: "black"`, TV receives CEC standby command
+- When `off_hours_mode: "clock"`, TV stays on showing time/date
+- Falls back gracefully if CEC not available (just shows black screen)
+
 ## Commands
 
 ```bash

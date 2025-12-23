@@ -5,6 +5,7 @@ Uses SDL2's hardware-accelerated texture rendering for smooth transitions.
 
 import logging
 import os
+import subprocess
 import time
 from datetime import datetime
 from enum import Enum
@@ -133,6 +134,9 @@ class Display:
         self.clock = pygame.time.Clock()
         self.target_fps = 30  # Can do 30fps with GPU acceleration
 
+        # Track display power state
+        self._display_powered = True
+
     def _init_fonts(self) -> None:
         """Initialize fonts for overlay and clock."""
         font_names = [
@@ -202,6 +206,10 @@ class Display:
             params: Display parameters.
             transition: Whether to use transition effect.
         """
+        # Turn display back on if it was off
+        if not self._display_powered:
+            self._set_display_power(True)
+
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
         self._current_params = params
@@ -587,15 +595,76 @@ class Display:
         date_y = time_y + time_h + 20
         date_texture.draw(dstrect=(date_x, date_y, date_w, date_h))
 
+    def _set_display_power(self, on: bool) -> None:
+        """
+        Control physical display power via HDMI-CEC.
+
+        Uses cec-client to send standby/wake commands to the TV.
+        If CEC is not available, just logs the state change.
+        Note: Many modern TVs will enter standby automatically when
+        receiving an all-black signal for a period of time.
+
+        Args:
+            on: True to turn display on, False to turn off.
+        """
+        self._display_powered = on
+
+        # Try HDMI-CEC if available
+        try:
+            if on:
+                # Wake up TV: "on 0" sends power on to TV (device 0)
+                result = subprocess.run(
+                    ['cec-client', '-s', '-d', '1'],
+                    input='on 0\n',
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            else:
+                # Put TV in standby: "standby 0" sends standby to TV
+                result = subprocess.run(
+                    ['cec-client', '-s', '-d', '1'],
+                    input='standby 0\n',
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+            if result.returncode == 0:
+                logger.info(f"Display power {'on' if on else 'off'} (CEC)")
+                return
+            else:
+                logger.debug(f"cec-client failed: {result.stderr}")
+        except FileNotFoundError:
+            logger.debug("cec-client not available - install cec-utils for TV power control")
+        except subprocess.TimeoutExpired:
+            logger.warning("cec-client timed out")
+        except Exception as e:
+            logger.debug(f"CEC error: {e}")
+
+        # Log state for awareness (black screen still saves power on many displays)
+        if on:
+            logger.info("Display resumed (no hardware power control available)")
+        else:
+            logger.info("Display off-hours mode (showing black screen)")
+
     def show_black(self) -> None:
-        """Show black screen."""
+        """Show black screen and turn off display to save power."""
         if self.mode != DisplayMode.BLACK:
             self._needs_redraw = True
         self.mode = DisplayMode.BLACK
         self._source_texture = None
 
+        # Turn off physical display to save electricity
+        if self._display_powered:
+            self._set_display_power(False)
+
     def show_clock(self) -> None:
         """Show clock display."""
+        # Turn display back on if it was off
+        if not self._display_powered:
+            self._set_display_power(True)
+
         if self.mode != DisplayMode.CLOCK:
             self._needs_redraw = True
         self.mode = DisplayMode.CLOCK
@@ -644,6 +713,10 @@ class Display:
 
     def cleanup(self) -> None:
         """Clean up SDL2 and pygame resources."""
+        # Ensure display is turned back on before exit
+        if not self._display_powered:
+            self._set_display_power(True)
+
         self._current_texture = None
         self._next_texture = None
         self._source_texture = None
