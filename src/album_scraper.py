@@ -1,8 +1,14 @@
 """
 Google Photos album scraper.
 Extracts photo and video URLs from public Google Photos albums.
+
+Optimized for low-memory environments (Raspberry Pi):
+- Uses memory-constrained Chrome options
+- Processes URLs in batches during scrolling
+- Periodically clears performance logs to prevent memory buildup
 """
 
+import gc
 import logging
 import re
 import time
@@ -67,12 +73,20 @@ class AlbumScraper:
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
 
-        # Set a large window to ensure all images load
-        options.add_argument("--window-size=1920,10000")
+        # Memory optimization for Raspberry Pi (limited RAM)
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-plugins")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--disable-background-networking")
+        options.add_argument("--disable-sync")
+        options.add_argument("--disable-translate")
+        options.add_argument("--disable-default-apps")
+        options.add_argument("--mute-audio")
+        options.add_argument("--js-flags=--max-old-space-size=256")  # Limit V8 heap
+        options.add_argument("--renderer-process-limit=1")
 
-        # Disable images initially to speed up page load
-        # We'll capture URLs from network requests instead
-        options.add_argument("--blink-settings=imagesEnabled=false")
+        # Use smaller window to reduce memory footprint
+        options.add_argument("--window-size=1280,2000")
 
         # Enable performance logging to capture network requests
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
@@ -155,47 +169,138 @@ class AlbumScraper:
             return url
         return url
 
-    def _scroll_page(self, driver: webdriver.Chrome, scroll_pause: float = 1.0) -> None:
+    def _scroll_and_collect(self, driver: webdriver.Chrome, scroll_pause: float = 0.8) -> Set[str]:
         """
-        Scroll through the page to trigger lazy-loading of all images.
+        Scroll through the page and collect image URLs from network requests.
+
+        Google Photos uses virtualized scrolling - only images near the viewport
+        are in the DOM. However, we can capture all image URLs from the browser's
+        performance logs as they are requested during scrolling.
+
+        Memory-optimized for large albums:
+        - Processes logs incrementally and clears them
+        - Runs garbage collection periodically
+        - Uses smaller scroll increments
 
         Args:
             driver: WebDriver instance.
             scroll_pause: Time to wait between scrolls.
+
+        Returns:
+            Set of collected base URLs.
         """
-        last_height = driver.execute_script("return document.body.scrollHeight")
+        collected_urls = set()
+        url_pattern = re.compile(r'https://lh3\.googleusercontent\.com/pw/[^\s"\'<>\\]+')
 
-        while True:
-            # Scroll down
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        def extract_from_performance_logs():
+            """Extract image URLs from browser performance logs (clears logs after reading)."""
+            new_urls = 0
+            try:
+                # get_log clears the log buffer, which is important for memory
+                logs = driver.get_log("performance")
+                for entry in logs:
+                    message = entry.get("message", "")
+                    # Quick check before regex
+                    if "googleusercontent.com/pw/" not in message:
+                        continue
+                    # Extract URLs from the log message
+                    for match in url_pattern.findall(message):
+                        base_url = self._extract_base_url(match)
+                        if base_url and base_url not in collected_urls:
+                            collected_urls.add(base_url)
+                            new_urls += 1
+                # Clear reference to logs list
+                del logs
+            except Exception as e:
+                logger.debug(f"Error extracting from performance logs: {e}")
+            return new_urls
 
-            # Wait for new content to load
+        # Find the scroll container (Google Photos uses a c-wiz element)
+        scroll_container = driver.execute_script("""
+            var cwiz = document.querySelectorAll('c-wiz');
+            for (var i = 0; i < cwiz.length; i++) {
+                if (cwiz[i].scrollHeight > 5000) {
+                    return cwiz[i];
+                }
+            }
+            return null;
+        """)
+
+        if not scroll_container:
+            logger.warning("Could not find scroll container, falling back to window scroll")
+            return self._extract_urls_from_page(driver)
+
+        scroll_height = driver.execute_script("return arguments[0].scrollHeight", scroll_container)
+        logger.info(f"Starting scroll and collect (container height: {scroll_height}px)...")
+
+        # Extract URLs captured during initial load
+        extract_from_performance_logs()
+        logger.info(f"Initial extraction: {len(collected_urls)} URLs")
+
+        # Scroll through the container
+        scroll_position = 0
+        scroll_increment = 1500  # Smaller increment for memory efficiency
+        no_new_urls_count = 0
+        max_no_new = 20  # Stop after 20 scrolls with no new URLs
+        scroll_count = 0
+        last_progress_log = 0
+
+        while scroll_position < scroll_height and no_new_urls_count < max_no_new:
+            scroll_position += scroll_increment
+            scroll_count += 1
+
+            driver.execute_script(
+                "arguments[0].scrollTop = arguments[1]",
+                scroll_container,
+                scroll_position
+            )
+
+            # Wait for images to load
             time.sleep(scroll_pause)
 
-            # Calculate new scroll height
-            new_height = driver.execute_script("return document.body.scrollHeight")
+            # Extract URLs from performance logs
+            new_count = extract_from_performance_logs()
 
-            if new_height == last_height:
-                # Try scrolling a bit more to trigger any remaining lazy loads
-                for _ in range(3):
-                    driver.execute_script(
-                        "window.scrollTo(0, document.body.scrollHeight + 1000);"
-                    )
-                    time.sleep(0.5)
+            if new_count > 0:
+                no_new_urls_count = 0
+            else:
+                no_new_urls_count += 1
 
-                final_height = driver.execute_script("return document.body.scrollHeight")
-                if final_height == new_height:
-                    break
-                new_height = final_height
+            # Log progress periodically (every 50 URLs or 30 scrolls)
+            total_urls = len(collected_urls)
+            if total_urls >= last_progress_log + 50 or scroll_count % 30 == 0:
+                progress_pct = min(100, int(scroll_position / scroll_height * 100))
+                logger.info(f"Progress: {progress_pct}% scrolled, {total_urls} URLs collected")
+                last_progress_log = total_urls
 
-            last_height = new_height
+            # Check if scroll height changed (more content loaded)
+            new_height = driver.execute_script("return arguments[0].scrollHeight", scroll_container)
+            if new_height > scroll_height:
+                scroll_height = new_height
+                no_new_urls_count = 0
 
-        # Scroll back to top
-        driver.execute_script("window.scrollTo(0, 0);")
+            # Periodic garbage collection for long-running scrapes
+            if scroll_count % 50 == 0:
+                gc.collect()
+
+            # Safety limit for extremely large albums
+            if scroll_position > 1000000:
+                logger.warning("Reached maximum scroll limit (1M px)")
+                break
+
+        logger.info(f"Scroll complete. Collected {len(collected_urls)} unique URLs after {scroll_count} scrolls.")
+
+        # Final cleanup
+        gc.collect()
+
+        return collected_urls
 
     def _extract_urls_from_page(self, driver: webdriver.Chrome) -> Set[str]:
         """
         Extract image URLs from the page source and network logs.
+
+        Fallback method when scroll container isn't found.
+        Memory-optimized: processes incrementally and clears references.
 
         Args:
             driver: WebDriver instance.
@@ -204,24 +309,11 @@ class AlbumScraper:
             Set of unique base URLs.
         """
         urls = set()
+        url_pattern = re.compile(
+            r'https://(?:lh3\.googleusercontent\.com|photos\.fife\.usercontent\.google\.com)/[^\s"\'<>\\]+'
+        )
 
-        # Method 1: Extract from page source using regex
-        page_source = driver.page_source
-
-        # Pattern for Google Photos image URLs
-        patterns = [
-            r'https://lh3\.googleusercontent\.com/[a-zA-Z0-9_-]+',
-            r'https://photos\.fife\.usercontent\.google\.com/[^\s"\'<>]+',
-        ]
-
-        for pattern in patterns:
-            matches = re.findall(pattern, page_source)
-            for match in matches:
-                base_url = self._extract_base_url(match)
-                if base_url:
-                    urls.add(base_url)
-
-        # Method 2: Extract from img elements
+        # Method 1: Extract from img elements (most reliable, low memory)
         try:
             img_elements = driver.find_elements(By.TAG_NAME, "img")
             for img in img_elements:
@@ -230,10 +322,11 @@ class AlbumScraper:
                     base_url = self._extract_base_url(src)
                     if base_url:
                         urls.add(base_url)
+            del img_elements
         except Exception as e:
             logger.debug(f"Error extracting from img elements: {e}")
 
-        # Method 3: Extract from data attributes
+        # Method 2: Extract from data attributes
         try:
             elements = driver.find_elements(By.CSS_SELECTOR, "[data-src]")
             for elem in elements:
@@ -242,27 +335,39 @@ class AlbumScraper:
                     base_url = self._extract_base_url(src)
                     if base_url:
                         urls.add(base_url)
+            del elements
         except Exception as e:
             logger.debug(f"Error extracting from data attributes: {e}")
 
-        # Method 4: Try to get from performance logs
+        # Method 3: Try to get from performance logs (clears buffer)
         try:
             logs = driver.get_log("performance")
             for entry in logs:
                 message = entry.get("message", "")
-                if self.GOOGLE_IMAGE_CDN in message or self.GOOGLE_PHOTO_CDN in message:
-                    # Extract URLs from log messages
-                    url_matches = re.findall(
-                        r'https://(?:lh3\.googleusercontent\.com|photos\.fife\.usercontent\.google\.com)/[^\s"\'<>\\]+',
-                        message
-                    )
-                    for match in url_matches:
-                        base_url = self._extract_base_url(match)
-                        if base_url:
-                            urls.add(base_url)
+                if self.GOOGLE_IMAGE_CDN not in message and self.GOOGLE_PHOTO_CDN not in message:
+                    continue
+                for match in url_pattern.findall(message):
+                    base_url = self._extract_base_url(match)
+                    if base_url:
+                        urls.add(base_url)
+            del logs
         except Exception as e:
             logger.debug(f"Error extracting from performance logs: {e}")
 
+        # Method 4: Extract from page source (last resort, uses more memory)
+        # Only do this if we found very few URLs from other methods
+        if len(urls) < 10:
+            try:
+                page_source = driver.page_source
+                for match in url_pattern.findall(page_source):
+                    base_url = self._extract_base_url(match)
+                    if base_url:
+                        urls.add(base_url)
+                del page_source
+            except Exception as e:
+                logger.debug(f"Error extracting from page source: {e}")
+
+        gc.collect()
         return urls
 
     def _extract_base_url(self, url: str) -> Optional[str]:
@@ -367,24 +472,48 @@ class AlbumScraper:
             # Navigate to album
             driver.get(album_url)
 
-            # Wait for page to load
+            # Wait for album photo grid to load (not just any image like profile pics)
+            logger.debug("Waiting for photo grid to load...")
             try:
+                # Wait for images with Google Photos CDN URLs
                 WebDriverWait(driver, self.timeout).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "img"))
+                    lambda d: d.execute_script("""
+                        var imgs = document.querySelectorAll('img[src*="googleusercontent"]');
+                        for (var i = 0; i < imgs.length; i++) {
+                            // Look for photo images (have long base64-like paths), not profile pics (=s32)
+                            var src = imgs[i].src || '';
+                            if (src.length > 100 && !src.includes('=s32') && !src.includes('=s48')) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    """)
                 )
             except TimeoutException:
-                logger.warning("Timeout waiting for images to load")
+                logger.warning("Timeout waiting for photo grid to load")
 
-            # Give extra time for dynamic content
-            time.sleep(2)
+            # Give extra time for dynamic content to render fully
+            time.sleep(3)
 
-            # Scroll to load all images
-            logger.debug("Scrolling page to load all images...")
-            self._scroll_page(driver)
+            # Wait for page height to stabilize (indicates grid has loaded)
+            last_height = driver.execute_script("return document.body.scrollHeight")
+            for _ in range(5):
+                time.sleep(1)
+                new_height = driver.execute_script("return document.body.scrollHeight")
+                if new_height > last_height:
+                    last_height = new_height
+                else:
+                    break
+            logger.debug(f"Page height stabilized at {last_height}px")
 
-            # Extract URLs
-            logger.debug("Extracting image URLs...")
-            urls = self._extract_urls_from_page(driver)
+            # Scroll through page and collect URLs as we go
+            # (Google Photos uses virtual scrolling - only visible items are in DOM)
+            logger.debug("Scrolling page and collecting URLs...")
+            urls = self._scroll_and_collect(driver)
+
+            # Also try extracting any remaining URLs from current page state
+            additional_urls = self._extract_urls_from_page(driver)
+            urls.update(additional_urls)
 
             # Try to get captions
             captions = self._extract_captions(driver)
@@ -417,6 +546,8 @@ class AlbumScraper:
                     driver.quit()
                 except Exception:
                     pass
+            # Force garbage collection after browser cleanup
+            gc.collect()
 
     def get_full_resolution_url(self, base_url: str) -> str:
         """
