@@ -280,4 +280,6 @@ python -m src.main --config ./config.yaml
 
 ## License
 
-MIT License - See LICENSE file for details.
+Copyright (c) 2025 Luc Vincent. All Rights Reserved.
+
+See LICENSE file for details.
