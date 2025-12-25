@@ -513,22 +513,31 @@ class CacheManager:
                         stats["errors"] += 1
                         self._sync_progress.downloads_done += 1
 
-            # Mark items not seen as deleted - but ONLY if we successfully scraped
-            # at least one album AND found at least one item. This prevents marking
-            # everything as deleted when the scraper fails (e.g., ChromeDriver crash,
-            # network error, page load timeout).
-            if albums_scraped_successfully > 0 and len(all_items) > 0:
+            # Mark items not seen as deleted - but ONLY if the scrape looks healthy.
+            # This prevents marking everything as deleted when the scraper fails
+            # (e.g., ChromeDriver crash, network error, page load timeout).
+            #
+            # We require finding at least 50% of our current cached items.
+            # This handles:
+            #   - Complete failures (0 items found)
+            #   - Partial failures (only a few items scraped before timeout)
+            #   - Normal changes (some photos added/removed from album)
+            current_cached_count = sum(1 for c in self._media.values() if not c.deleted)
+            min_required = max(1, int(current_cached_count * 0.5))  # At least 50% of current
+
+            if albums_scraped_successfully > 0 and len(all_items) >= min_required:
                 for media_id, cached in self._media.items():
                     if cached.url not in seen_urls and not cached.deleted:
                         cached.deleted = True
                         stats["deleted"] += 1
             elif total_albums > 0:
-                if albums_scraped_successfully > 0:
+                if len(all_items) < min_required and current_cached_count > 0:
                     logger.warning(
-                        f"Skipping deletion check: scraped {albums_scraped_successfully} album(s) "
-                        f"but found 0 items. Existing cached items will be preserved."
+                        f"Skipping deletion check: found {len(all_items)} items but expected "
+                        f"at least {min_required} (50% of {current_cached_count} cached). "
+                        f"Scrape may have failed - preserving existing cache."
                     )
-                else:
+                elif albums_scraped_successfully == 0:
                     logger.warning(
                         f"Skipping deletion check: all {total_albums} album(s) failed to scrape. "
                         "Existing cached items will be preserved."
