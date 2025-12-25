@@ -514,18 +514,25 @@ class CacheManager:
                         self._sync_progress.downloads_done += 1
 
             # Mark items not seen as deleted - but ONLY if we successfully scraped
-            # at least one album. This prevents marking everything as deleted when
-            # the scraper fails (e.g., ChromeDriver crash, network error).
-            if albums_scraped_successfully > 0:
+            # at least one album AND found at least one item. This prevents marking
+            # everything as deleted when the scraper fails (e.g., ChromeDriver crash,
+            # network error, page load timeout).
+            if albums_scraped_successfully > 0 and len(all_items) > 0:
                 for media_id, cached in self._media.items():
                     if cached.url not in seen_urls and not cached.deleted:
                         cached.deleted = True
                         stats["deleted"] += 1
             elif total_albums > 0:
-                logger.warning(
-                    f"Skipping deletion check: all {total_albums} album(s) failed to scrape. "
-                    "Existing cached items will be preserved."
-                )
+                if albums_scraped_successfully > 0:
+                    logger.warning(
+                        f"Skipping deletion check: scraped {albums_scraped_successfully} album(s) "
+                        f"but found 0 items. Existing cached items will be preserved."
+                    )
+                else:
+                    logger.warning(
+                        f"Skipping deletion check: all {total_albums} album(s) failed to scrape. "
+                        "Existing cached items will be preserved."
+                    )
 
             # Save metadata
             self._save_metadata()
