@@ -72,6 +72,7 @@ class CachedMedia:
     download_date: str = ""          # When first downloaded
     last_seen: str = ""              # Last time seen in album scrape
     content_hash: str = ""           # Hash of file content
+    cached_faces: Optional[List[Dict[str, Any]]] = None  # Detected faces (separate from display_params)
     display_params: Optional[Dict[str, Any]] = None  # Cached display parameters
     deleted: bool = False            # Marked for deletion
 
@@ -87,6 +88,7 @@ class CachedMedia:
             "download_date": self.download_date,
             "last_seen": self.last_seen,
             "content_hash": self.content_hash,
+            "cached_faces": self.cached_faces,
             "display_params": self.display_params,
             "deleted": self.deleted
         }
@@ -104,6 +106,7 @@ class CachedMedia:
             download_date=data.get("download_date", ""),
             last_seen=data.get("last_seen", ""),
             content_hash=data.get("content_hash", ""),
+            cached_faces=data.get("cached_faces"),
             display_params=data.get("display_params"),
             deleted=data.get("deleted", False)
         )
@@ -198,10 +201,56 @@ class CacheManager:
                         logger.info("Cache cleared due to resolution change")
                         return
 
+                    # Check if scaling settings changed (only invalidates display_params, not files or faces)
+                    current_scaling = {
+                        "mode": self.config.scaling.mode,
+                        "max_crop_percent": self.config.scaling.max_crop_percent,
+                        "face_position": self.config.scaling.face_position,
+                        "fallback_crop": self.config.scaling.fallback_crop,
+                    }
+                    cached_scaling = cached_settings.get("scaling", {})
+                    scaling_changed = (
+                        cached_scaling and
+                        any(cached_scaling.get(k) != v for k, v in current_scaling.items())
+                    )
+
+                    # Check if face detection settings changed (invalidates cached_faces)
+                    current_face_detection = {
+                        "enabled": self.config.scaling.face_detection,
+                        "confidence_threshold": 0.6,  # Default from FaceDetector
+                        "model_version": "yunet_2023mar",
+                    }
+                    cached_face_detection = cached_settings.get("face_detection", {})
+                    face_detection_changed = (
+                        cached_face_detection and
+                        any(cached_face_detection.get(k) != v for k, v in current_face_detection.items())
+                    )
+
                     self._media = {
                         k: CachedMedia.from_dict(v)
                         for k, v in data.get("media", {}).items()
                     }
+
+                    # If face detection settings changed, clear cached_faces to force re-detection
+                    if face_detection_changed:
+                        logger.info(
+                            f"Face detection settings changed, invalidating cached faces "
+                            f"for {len(self._media)} items"
+                        )
+                        for cached in self._media.values():
+                            cached.cached_faces = None
+                            cached.display_params = None  # Also invalidate display params since faces affect crop
+                        self._save_metadata()
+                    # If only scaling settings changed, clear display_params but keep cached faces
+                    elif scaling_changed:
+                        logger.info(
+                            f"Scaling settings changed, invalidating display parameters "
+                            f"for {len(self._media)} items (keeping cached faces)"
+                        )
+                        for cached in self._media.values():
+                            cached.display_params = None
+                        self._save_metadata()
+
                     logger.info(f"Loaded {len(self._media)} cached items from metadata")
                 except Exception as e:
                     logger.error(f"Failed to load metadata: {e}")
@@ -216,7 +265,18 @@ class CacheManager:
                     "last_updated": datetime.now().isoformat(),
                     "settings": {
                         "max_dimension": self.config.sync.max_dimension,
-                        "full_resolution": self.config.sync.full_resolution
+                        "full_resolution": self.config.sync.full_resolution,
+                        "scaling": {
+                            "mode": self.config.scaling.mode,
+                            "max_crop_percent": self.config.scaling.max_crop_percent,
+                            "face_position": self.config.scaling.face_position,
+                            "fallback_crop": self.config.scaling.fallback_crop,
+                        },
+                        "face_detection": {
+                            "enabled": self.config.scaling.face_detection,
+                            "confidence_threshold": 0.6,  # Default from FaceDetector
+                            "model_version": "yunet_2023mar",  # Track model version
+                        }
                     }
                 }
                 with open(self.metadata_path, 'w') as f:
@@ -616,21 +676,31 @@ class CacheManager:
                 scaling_mode=self.config.scaling.mode,
                 face_position=self.config.scaling.face_position,
                 fallback_crop=self.config.scaling.fallback_crop,
+                max_crop_percent=self.config.scaling.max_crop_percent,
+                background_color=tuple(self.config.scaling.background_color),
                 ken_burns_enabled=self.config.ken_burns.enabled,
                 ken_burns_zoom_range=tuple(self.config.ken_burns.zoom_range),
                 ken_burns_pan_speed=self.config.ken_burns.pan_speed,
                 ken_burns_randomize=self.config.ken_burns.randomize
             )
 
-        # Detect faces if enabled and not cached
+        # Get faces: use cached faces if available, otherwise detect and cache
         faces = []
-        if (self.config.scaling.face_detection and
-            self._face_detector and
-            cached.media_type == "photo"):
-            try:
-                faces = self._face_detector.detect_faces(cached.local_path)
-            except Exception as e:
-                logger.debug(f"Face detection failed: {e}")
+        if cached.media_type == "photo":
+            if cached.cached_faces is not None:
+                # Use cached faces (already detected)
+                faces = faces_from_dict(cached.cached_faces)
+                logger.debug(f"Using {len(faces)} cached faces for {cached.media_id}")
+            elif self.config.scaling.face_detection and self._face_detector:
+                # Detect faces and cache them
+                try:
+                    faces = self._face_detector.detect_faces(cached.local_path)
+                    # Cache the faces separately from display_params
+                    with self._lock:
+                        cached.cached_faces = faces_to_dict(faces)
+                    logger.debug(f"Detected and cached {len(faces)} faces for {cached.media_id}")
+                except Exception as e:
+                    logger.debug(f"Face detection failed: {e}")
 
         # Compute display params
         params = self._image_processor.compute_display_params(
@@ -639,7 +709,7 @@ class CacheManager:
             photo_duration=self.config.display.photo_duration_seconds
         )
 
-        # Cache the params
+        # Cache the display params
         with self._lock:
             cached.display_params = params.to_dict()
             self._save_metadata()

@@ -118,6 +118,8 @@ class ImageProcessor:
         scaling_mode: str = "fill",
         face_position: str = "center",
         fallback_crop: str = "center",
+        max_crop_percent: int = 15,
+        background_color: Tuple[int, int, int] = (0, 0, 0),
         ken_burns_enabled: bool = True,
         ken_burns_zoom_range: Tuple[float, float] = (1.0, 1.15),
         ken_burns_pan_speed: float = 0.02,
@@ -129,9 +131,11 @@ class ImageProcessor:
         Args:
             screen_width: Display width in pixels.
             screen_height: Display height in pixels.
-            scaling_mode: "fill", "fit", or "stretch".
+            scaling_mode: "fill", "fit", "balanced", or "stretch".
             face_position: "center", "rule_of_thirds", or "top_third".
             fallback_crop: "center", "top", or "bottom" when no faces.
+            max_crop_percent: For "balanced" mode, max % of image to crop (0-50).
+            background_color: RGB tuple for letterbox/pillarbox fill.
             ken_burns_enabled: Whether to generate Ken Burns animations.
             ken_burns_zoom_range: (min_zoom, max_zoom) for Ken Burns.
             ken_burns_pan_speed: Pan speed as fraction per second.
@@ -144,6 +148,8 @@ class ImageProcessor:
         self.scaling_mode = scaling_mode
         self.face_position = face_position
         self.fallback_crop = fallback_crop
+        self.max_crop_percent = max_crop_percent
+        self.background_color = background_color
 
         self.ken_burns_enabled = ken_burns_enabled
         self.ken_burns_zoom_range = ken_burns_zoom_range
@@ -190,6 +196,12 @@ class ImageProcessor:
         elif self.scaling_mode == "stretch":
             # No cropping, will stretch
             crop_region = CropRegion(0, 0, 1, 1)
+        elif self.scaling_mode == "balanced":
+            # Balanced mode: partial cropping to reduce bars while keeping most of image
+            crop_region = self._compute_balanced_crop(
+                img_width, img_height,
+                faces or []
+            )
         else:  # fill mode
             crop_region = self._compute_fill_crop(
                 img_width, img_height,
@@ -249,6 +261,78 @@ class ImageProcessor:
             )
         else:
             # Use fallback positioning
+            crop_x, crop_y = self._get_fallback_crop_position(
+                crop_width, crop_height
+            )
+
+        return CropRegion(crop_x, crop_y, crop_width, crop_height)
+
+    def _compute_balanced_crop(
+        self,
+        img_width: int,
+        img_height: int,
+        faces: List[FaceRegion]
+    ) -> CropRegion:
+        """
+        Compute crop region for balanced mode.
+
+        Balanced mode crops up to max_crop_percent of the image to reduce
+        letterbox/pillarbox bars, while keeping most of the image visible.
+        If the aspect ratio difference is small, it acts like "fill".
+        If large, it limits cropping and accepts some bars.
+
+        Args:
+            img_width: Image width.
+            img_height: Image height.
+            faces: Detected faces.
+
+        Returns:
+            CropRegion for balanced crop.
+        """
+        img_aspect = img_width / img_height
+        max_crop = self.max_crop_percent / 100.0
+
+        # Calculate what "fill" mode would crop
+        if img_aspect > self.screen_aspect:
+            # Image is wider - would crop sides
+            fill_crop_width = self.screen_aspect / img_aspect
+            fill_crop_height = 1.0
+            # How much of the image width would be cropped?
+            crop_fraction = 1.0 - fill_crop_width
+        else:
+            # Image is taller - would crop top/bottom
+            fill_crop_width = 1.0
+            fill_crop_height = img_aspect / self.screen_aspect
+            # How much of the image height would be cropped?
+            crop_fraction = 1.0 - fill_crop_height
+
+        # If fill mode cropping is within our limit, use fill mode
+        if crop_fraction <= max_crop:
+            # Use full fill mode crop
+            crop_width = fill_crop_width
+            crop_height = fill_crop_height
+        else:
+            # Limit the crop to max_crop_percent
+            if img_aspect > self.screen_aspect:
+                # Wider image: limit horizontal crop
+                crop_width = 1.0 - max_crop
+                # Calculate height to maintain as much of screen aspect as possible
+                # while staying within image bounds
+                ideal_height = crop_width * img_aspect / self.screen_aspect
+                crop_height = min(1.0, ideal_height)
+            else:
+                # Taller image: limit vertical crop
+                crop_height = 1.0 - max_crop
+                # Calculate width
+                ideal_width = crop_height * self.screen_aspect / img_aspect
+                crop_width = min(1.0, ideal_width)
+
+        # Determine crop position (same logic as fill mode)
+        if faces:
+            crop_x, crop_y = self._position_crop_for_faces(
+                crop_width, crop_height, faces
+            )
+        else:
             crop_x, crop_y = self._get_fallback_crop_position(
                 crop_width, crop_height
             )
@@ -573,19 +657,38 @@ class ImageProcessor:
             if params and params.crop_region:
                 img = self.apply_crop(img, params.crop_region)
 
-            # Resize to screen
-            if self.scaling_mode == "fill" or self.scaling_mode == "stretch":
+            # Resize to screen based on scaling mode
+            if self.scaling_mode == "fill":
+                # Fill mode: crop region already adjusted, just resize to screen
                 img = img.resize(
                     (self.screen_width, self.screen_height),
                     Image.Resampling.LANCZOS
                 )
-            else:  # fit
+            elif self.scaling_mode == "stretch":
+                # Stretch mode: resize without maintaining aspect ratio
+                img = img.resize(
+                    (self.screen_width, self.screen_height),
+                    Image.Resampling.LANCZOS
+                )
+            elif self.scaling_mode == "balanced":
+                # Balanced mode: resize maintaining aspect ratio, add bars if needed
                 img.thumbnail(
                     (self.screen_width, self.screen_height),
                     Image.Resampling.LANCZOS
                 )
-                # Create black background and center image
-                result = Image.new("RGB", (self.screen_width, self.screen_height), (0, 0, 0))
+                # Create background with configured color and center image
+                result = Image.new("RGB", (self.screen_width, self.screen_height), self.background_color)
+                paste_x = (self.screen_width - img.width) // 2
+                paste_y = (self.screen_height - img.height) // 2
+                result.paste(img, (paste_x, paste_y))
+                img = result
+            else:  # fit mode
+                img.thumbnail(
+                    (self.screen_width, self.screen_height),
+                    Image.Resampling.LANCZOS
+                )
+                # Create background with configured color and center image
+                result = Image.new("RGB", (self.screen_width, self.screen_height), self.background_color)
                 paste_x = (self.screen_width - img.width) // 2
                 paste_y = (self.screen_height - img.height) // 2
                 result.paste(img, (paste_x, paste_y))

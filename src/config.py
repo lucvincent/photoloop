@@ -49,11 +49,15 @@ class DisplayConfig:
 @dataclass
 class ScalingConfig:
     """Scaling and cropping settings."""
-    mode: str = "fill"  # fill, fit, stretch
+    mode: str = "fill"  # fill, fit, balanced, stretch
     smart_crop: bool = True
     face_detection: bool = True
     face_position: str = "center"  # center, rule_of_thirds, top_third
     fallback_crop: str = "center"  # center, top, bottom
+    # For "balanced" mode: max percentage of image that can be cropped (0-50)
+    max_crop_percent: int = 15
+    # Background/fill color for letterbox/pillarbox bars [R, G, B]
+    background_color: List[int] = field(default_factory=lambda: [0, 0, 0])
 
 
 @dataclass
@@ -303,8 +307,11 @@ def validate_config(config: PhotoLoopConfig) -> List[str]:
         errors.append("Display order must be 'random' or 'sequential'")
 
     # Check scaling settings
-    if config.scaling.mode not in ['fill', 'fit', 'stretch']:
-        errors.append("Scaling mode must be 'fill', 'fit', or 'stretch'")
+    if config.scaling.mode not in ['fill', 'fit', 'balanced', 'stretch']:
+        errors.append("Scaling mode must be 'fill', 'fit', 'balanced', or 'stretch'")
+
+    if not (0 <= config.scaling.max_crop_percent <= 50):
+        errors.append("max_crop_percent must be between 0 and 50")
 
     if config.scaling.face_position not in ['center', 'rule_of_thirds', 'top_third']:
         errors.append("Face position must be 'center', 'rule_of_thirds', or 'top_third'")
