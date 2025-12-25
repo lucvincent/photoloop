@@ -61,33 +61,49 @@ class Display:
         pygame.init()
         pygame.mouse.set_visible(False)
 
-        # Get screen dimensions
-        if config.display.resolution == "auto":
-            info = pygame.display.Info()
-            self.screen_width = info.current_w
-            self.screen_height = info.current_h
-        else:
-            parts = config.display.resolution.lower().split('x')
-            self.screen_width = int(parts[0])
-            self.screen_height = int(parts[1])
-
-        logger.info(f"Display resolution: {self.screen_width}x{self.screen_height}")
-
         # Create SDL2 window and hardware-accelerated renderer
         windowed = os.environ.get("PHOTOLOOP_WINDOWED", "").lower() in ("1", "true", "yes")
 
         if windowed:
+            # For windowed mode, use configured or default resolution
+            if config.display.resolution == "auto":
+                info = pygame.display.Info()
+                self.screen_width = info.current_w
+                self.screen_height = info.current_h
+            else:
+                parts = config.display.resolution.lower().split('x')
+                self.screen_width = int(parts[0])
+                self.screen_height = int(parts[1])
+
             logger.info("Running in windowed mode (PHOTOLOOP_WINDOWED set)")
             self._window = sdl2.Window(
                 "PhotoLoop",
                 size=(self.screen_width, self.screen_height)
             )
         else:
-            self._window = sdl2.Window(
-                "PhotoLoop",
-                size=(self.screen_width, self.screen_height),
-                fullscreen=True
-            )
+            # For fullscreen: create window first, then query actual size
+            # This avoids issues where pygame.display.Info() returns wrong
+            # resolution before display is fully initialized (common on Pi)
+            if config.display.resolution == "auto":
+                # Create fullscreen window - SDL2 will use native resolution
+                self._window = sdl2.Window(
+                    "PhotoLoop",
+                    size=(1920, 1080),  # Initial size, will be overridden by fullscreen
+                    fullscreen=True
+                )
+                # Query actual window size AFTER fullscreen is set
+                self.screen_width, self.screen_height = self._window.size
+            else:
+                parts = config.display.resolution.lower().split('x')
+                self.screen_width = int(parts[0])
+                self.screen_height = int(parts[1])
+                self._window = sdl2.Window(
+                    "PhotoLoop",
+                    size=(self.screen_width, self.screen_height),
+                    fullscreen=True
+                )
+
+        logger.info(f"Display resolution: {self.screen_width}x{self.screen_height}")
 
         # Create hardware-accelerated renderer with vsync
         self._renderer = sdl2.Renderer(self._window, accelerated=True, vsync=True)
@@ -120,11 +136,16 @@ class Display:
             scaling_mode=config.scaling.mode,
             face_position=config.scaling.face_position,
             fallback_crop=config.scaling.fallback_crop,
+            max_crop_percent=config.scaling.max_crop_percent,
+            background_color=tuple(config.scaling.background_color),
             ken_burns_enabled=config.ken_burns.enabled,
             ken_burns_zoom_range=tuple(config.ken_burns.zoom_range),
             ken_burns_pan_speed=config.ken_burns.pan_speed,
             ken_burns_randomize=config.ken_burns.randomize
         )
+
+        # Background color for letterbox/pillarbox bars
+        self._bg_color = tuple(config.scaling.background_color) + (255,)
 
         # Fonts for overlay and clock
         self._init_fonts()
@@ -359,7 +380,7 @@ class Display:
 
     def _render_slideshow(self) -> None:
         """Render the current slideshow frame."""
-        self._renderer.draw_color = (0, 0, 0, 255)
+        self._renderer.draw_color = self._bg_color
         self._renderer.clear()
 
         if self._source_texture is not None and self._current_params is not None:
@@ -414,12 +435,12 @@ class Display:
             self._current_texture = self._next_texture
             self._next_texture = None
             self._transitioning = False
-            self._renderer.draw_color = (0, 0, 0, 255)
+            self._renderer.draw_color = self._bg_color
             self._renderer.clear()
             self._current_texture.draw(dstrect=(0, 0, self.screen_width, self.screen_height))
             return
 
-        self._renderer.draw_color = (0, 0, 0, 255)
+        self._renderer.draw_color = self._bg_color
         self._renderer.clear()
 
         if self._transition_type == TransitionType.FADE:
