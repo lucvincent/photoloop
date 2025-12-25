@@ -66,12 +66,24 @@ display:
 # ------------------------------------------------------------
 scaling:
   # Scaling mode determines how photos fit the screen:
-  #   "fill"    - Scale to fill entire screen, crop excess (no black bars)
-  #   "fit"     - Scale to fit within screen, may have black bars
-  #   "stretch" - Stretch to fill (distorts aspect ratio - not recommended)
+  #   "fill"     - Scale to fill entire screen, crop excess (no black bars)
+  #   "fit"      - Scale to fit within screen, may have black bars
+  #   "balanced" - Crop up to max_crop_percent, then show bars for the rest
+  #                (good compromise between fill and fit)
+  #   "stretch"  - Stretch to fill (distorts aspect ratio - not recommended)
   mode: "fill"
 
-  # Smart cropping (only applies when mode is "fill")
+  # For "balanced" mode: maximum percentage of image that can be cropped (0-50)
+  # Lower values = more bars but less cropping, higher = more cropping
+  # Example: 15 means crop up to 15% before showing bars
+  max_crop_percent: 15
+
+  # Background color for letterbox/pillarbox bars (fit and balanced modes)
+  # RGB color [R, G, B] where each value is 0-255
+  background_color: [0, 0, 0]      # Black bars (default)
+  # background_color: [32, 32, 32]  # Dark gray bars
+
+  # Smart cropping (applies to fill and balanced modes)
   smart_crop: true                 # Enable intelligent crop region selection
 
   # Face detection for smart cropping
