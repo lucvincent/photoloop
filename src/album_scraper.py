@@ -328,8 +328,9 @@ class AlbumScraper:
             Set of unique base URLs.
         """
         urls = set()
+        # Only match album photo URLs with /pw/ path (filters out profile pics)
         url_pattern = re.compile(
-            r'https://(?:lh3\.googleusercontent\.com|photos\.fife\.usercontent\.google\.com)/[^\s"\'<>\\]+'
+            r'https://(?:lh3\.googleusercontent\.com|photos\.fife\.usercontent\.google\.com)/pw/[^\s"\'<>\\]+'
         )
 
         # Method 1: Extract from img elements (most reliable, low memory)
@@ -405,11 +406,21 @@ class AlbumScraper:
         if not url:
             return None
 
-        # Skip profile pictures and UI elements
+        # Only accept album photo URLs (must have /pw/ path)
+        # This filters out profile pictures which use /a/ or other paths
+        if "/pw/" not in url:
+            return None
+
+        # Skip profile pictures, avatars, and UI elements
         skip_patterns = [
-            "/a/default-user",
-            "/ACJPJp",
-            "=s32", "=s48", "=s64", "=s96",  # Small icons
+            "/a/default-user",      # Default user avatar
+            "/a-/",                 # Profile picture path
+            "/ACJPJp",              # UI element
+            "=s32", "=s48", "=s64", "=s96", "=s128",  # Small icons/avatars
+            "-c-k",                 # Circular crop (profile pics)
+            "-cc-",                 # Another circular crop variant
+            "-rw-c",                # Circular crop variant
+            "-no-c",                # No circular crop but often profile-related
         ]
         for pattern in skip_patterns:
             if pattern in url:
