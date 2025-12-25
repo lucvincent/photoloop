@@ -19,7 +19,10 @@
 <body>
     <div class="container">
         <header>
-            <h1>PhotoLoop</h1>
+            <div class="logo-title">
+                <img src="{{ url_for('static', filename='logo.svg') }}" alt="PhotoLoop">
+                <h1>PhotoLoop</h1>
+            </div>
             <div id="status-indicator" class="status">Loading...</div>
         </header>
 
