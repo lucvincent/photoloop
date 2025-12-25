@@ -27,9 +27,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
+# Add project root to path - handle both dev and installed locations
+SCRIPT_DIR = Path(__file__).parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+
+# Development: /home/user/photoloop/scripts/health_check.py -> src/
+# Installed: /opt/photoloop/scripts/health_check.py -> photoloop/src/
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# For installed location, also add the photoloop package path
+installed_src = PROJECT_ROOT / "photoloop"
+if installed_src.exists():
+    sys.path.insert(0, str(installed_src))
 
 
 @dataclass

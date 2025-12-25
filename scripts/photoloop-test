@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""
+PhotoLoop Test Runner
+
+Unified test interface for PhotoLoop system health checks and unit tests.
+
+Usage:
+    photoloop-test              # Run all health checks (non-disruptive)
+    photoloop-test --quick      # Quick checks only
+    photoloop-test --verbose    # Detailed output
+    photoloop-test --json       # JSON output for automation
+    photoloop-test --unit       # Run unit tests (safe, uses temp dirs)
+    photoloop-test --all        # Run health checks + unit tests
+
+Exit codes:
+    0 - All checks passed
+    1 - Some checks failed
+    2 - Critical failure
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def find_project_root():
+    """Find the PhotoLoop project root directory."""
+    # Check common locations
+    candidates = [
+        Path("/opt/photoloop"),
+        Path("/home") / os.environ.get("USER", "pi") / "photoloop",
+        Path.cwd(),
+    ]
+
+    for path in candidates:
+        if (path / "tests").exists() or (path / "src").exists():
+            return path
+
+    return None
+
+
+def find_python():
+    """Find the Python interpreter to use."""
+    # Prefer the venv Python
+    venv_python = Path("/opt/photoloop/venv/bin/python")
+    if venv_python.exists():
+        return str(venv_python)
+
+    # Fallback to system python
+    return sys.executable
+
+
+def run_health_checks(args):
+    """Run health checks using the health_check.py script."""
+    project_root = find_project_root()
+    if not project_root:
+        print("Error: Could not find PhotoLoop project directory")
+        return 2
+
+    health_script = project_root / "scripts" / "health_check.py"
+    if not health_script.exists():
+        print(f"Error: Health check script not found at {health_script}")
+        return 2
+
+    python = find_python()
+    cmd = [python, str(health_script)]
+
+    if args.quick:
+        cmd.append("--quick")
+    if args.verbose:
+        cmd.append("--verbose")
+    if args.json:
+        cmd.append("--json")
+
+    result = subprocess.run(cmd)
+    return result.returncode
+
+
+def run_unit_tests(args):
+    """Run unit tests using pytest."""
+    project_root = find_project_root()
+    if not project_root:
+        print("Error: Could not find PhotoLoop project directory")
+        return 2
+
+    tests_dir = project_root / "tests"
+    if not tests_dir.exists():
+        print(f"Error: Tests directory not found at {tests_dir}")
+        return 2
+
+    python = find_python()
+
+    # Unit tests only (exclude health checks which test the live system)
+    unit_test_files = [
+        str(tests_dir / "test_config.py"),
+        str(tests_dir / "test_face_detector.py"),
+        str(tests_dir / "test_image_processor.py"),
+    ]
+
+    # Filter to only existing files
+    unit_test_files = [f for f in unit_test_files if Path(f).exists()]
+
+    if not unit_test_files:
+        print("No unit test files found")
+        return 1
+
+    cmd = [python, "-m", "pytest"] + unit_test_files
+
+    if args.verbose:
+        cmd.append("-v")
+    else:
+        cmd.append("-q")
+
+    # Add project root to PYTHONPATH
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(project_root) + ":" + env.get("PYTHONPATH", "")
+
+    result = subprocess.run(cmd, env=env)
+    return result.returncode
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="PhotoLoop Test Runner",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  photoloop-test              Run health checks (safe for live system)
+  photoloop-test --quick      Quick health checks only
+  photoloop-test --unit       Run unit tests
+  photoloop-test --all        Run everything
+  photoloop-test --json       JSON output for scripting
+        """
+    )
+
+    parser.add_argument(
+        "--quick", "-q",
+        action="store_true",
+        help="Run quick checks only (health checks)"
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Verbose output"
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output in JSON format (health checks only)"
+    )
+    parser.add_argument(
+        "--unit",
+        action="store_true",
+        help="Run unit tests instead of health checks"
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Run both health checks and unit tests"
+    )
+
+    args = parser.parse_args()
+
+    exit_code = 0
+
+    if args.all:
+        # Run both
+        print("=" * 50)
+        print("Running Health Checks...")
+        print("=" * 50)
+        health_code = run_health_checks(args)
+
+        print()
+        print("=" * 50)
+        print("Running Unit Tests...")
+        print("=" * 50)
+        unit_code = run_unit_tests(args)
+
+        # Return worst exit code
+        exit_code = max(health_code, unit_code)
+
+    elif args.unit:
+        exit_code = run_unit_tests(args)
+    else:
+        # Default: health checks
+        exit_code = run_health_checks(args)
+
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

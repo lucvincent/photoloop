@@ -26,5 +26,8 @@ ffpyplayer>=4.5.0
 # HTTP requests
 requests>=2.31.0
 
+# Testing
+pytest>=7.0.0
+
 # For CLI argument parsing (stdlib, but listed for clarity)
 # argparse is built-in

@@ -197,6 +197,22 @@ if [ -d "$SCRIPT_DIR/src" ]; then
         cp -r "$SCRIPT_DIR/models/"* "$INSTALL_DIR/models/"
         echo -e "${GREEN}Face detection model installed.${NC}"
     fi
+
+    # Copy tests directory
+    if [ -d "$SCRIPT_DIR/tests" ]; then
+        mkdir -p "$INSTALL_DIR/tests"
+        cp -r "$SCRIPT_DIR/tests/"* "$INSTALL_DIR/tests/"
+        chmod -R 755 "$INSTALL_DIR/tests/"
+        echo -e "${GREEN}Test suite installed.${NC}"
+    fi
+
+    # Copy scripts directory
+    if [ -d "$SCRIPT_DIR/scripts" ]; then
+        mkdir -p "$INSTALL_DIR/scripts"
+        cp -r "$SCRIPT_DIR/scripts/"* "$INSTALL_DIR/scripts/"
+        chmod -R 755 "$INSTALL_DIR/scripts/"
+        echo -e "${GREEN}Utility scripts installed.${NC}"
+    fi
 else
     echo -e "${RED}Error: Source files not found. Run this script from the photoloop directory.${NC}"
     exit 1
@@ -291,7 +307,7 @@ systemctl enable photoloop
 echo -e "${GREEN}Systemd service installed and enabled.${NC}"
 
 echo ""
-echo -e "${YELLOW}[7/7] Creating CLI command...${NC}"
+echo -e "${YELLOW}[7/7] Creating CLI commands...${NC}"
 
 # Create CLI wrapper script
 cat > /usr/local/bin/photoloop << 'EOF'
@@ -301,7 +317,15 @@ EOF
 
 chmod +x /usr/local/bin/photoloop
 
-echo -e "${GREEN}CLI command installed.${NC}"
+# Create test CLI wrapper script
+cat > /usr/local/bin/photoloop-test << 'EOF'
+#!/bin/bash
+/opt/photoloop/venv/bin/python /opt/photoloop/scripts/photoloop-test "$@"
+EOF
+
+chmod +x /usr/local/bin/photoloop-test
+
+echo -e "${GREEN}CLI commands installed (photoloop, photoloop-test).${NC}"
 
 echo ""
 echo -e "${GREEN}"
@@ -334,6 +358,12 @@ echo "  photoloop start     - Force slideshow on"
 echo "  photoloop stop      - Force slideshow off"
 echo "  photoloop resume    - Resume schedule"
 echo "  photoloop sync      - Sync albums now"
+echo ""
+echo "Test commands:"
+echo "  photoloop-test           - Run health checks"
+echo "  photoloop-test --quick   - Quick checks only"
+echo "  photoloop-test --unit    - Run unit tests"
+echo "  photoloop-test --verbose - Detailed output"
 echo ""
 echo "Service commands:"
 echo "  sudo systemctl start photoloop    - Start service"
