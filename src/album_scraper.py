@@ -625,7 +625,8 @@ class AlbumScraper:
         self,
         album_url: str,
         urls_to_fetch: Set[str],
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        caption_found_callback: Optional[Callable[[str, Optional[str]], None]] = None
     ) -> Dict[str, Optional[str]]:
         """
         Fetch captions for specific photo URLs from a Google Photos album.
@@ -633,10 +634,15 @@ class AlbumScraper:
         This method opens each photo's detail view to extract its caption.
         It's slower than scraping but necessary since captions aren't in the grid view.
 
+        Processes photos until complete or Chrome runs out of memory.
+        On low-RAM devices (e.g., 4GB Pi), expect ~400 photos before memory issues.
+
         Args:
             album_url: URL of the Google Photos album.
             urls_to_fetch: Set of base URLs to fetch captions for.
             progress_callback: Optional callback(current, total) for progress updates.
+            caption_found_callback: Optional callback(url, caption) called immediately
+                when each caption is found, allowing incremental saves.
 
         Returns:
             Dict mapping base URLs to their captions (None if no caption).
@@ -645,51 +651,57 @@ class AlbumScraper:
             return {}
 
         captions: Dict[str, Optional[str]] = {}
-        driver = None
         processed_urls: Set[str] = set()
+        urls_needed = len(urls_to_fetch)
+        total_found = 0
+        driver = None
 
-        logger.info(f"Fetching captions for {len(urls_to_fetch)} photos...")
+        logger.info(f"Fetching captions for {urls_needed} photos...")
+
+        from selenium.webdriver.common.keys import Keys
 
         try:
             driver = self._init_driver()
             driver.get(album_url)
+            time.sleep(8)
 
-            # Wait for page to load
-            time.sleep(5)
-
-            # Find the scroll container
+            # Find the scroll container with the most content
             scroll_container = driver.execute_script("""
                 var cwiz = document.querySelectorAll('c-wiz');
+                var best = null;
+                var maxHeight = 0;
                 for (var i = 0; i < cwiz.length; i++) {
-                    if (cwiz[i].scrollHeight > 1000) {
-                        return cwiz[i];
+                    if (cwiz[i].scrollHeight > maxHeight) {
+                        maxHeight = cwiz[i].scrollHeight;
+                        best = cwiz[i];
                     }
                 }
-                return null;
+                return best;
             """)
 
             if not scroll_container:
                 logger.warning("Could not find scroll container for caption extraction")
                 return captions
 
-            urls_found = 0
-            urls_needed = len(urls_to_fetch)
+            container_height = driver.execute_script(
+                "return arguments[0].scrollHeight", scroll_container
+            )
+            logger.info(f"Found scroll container with height: {container_height}")
+
             scroll_position = 0
             scroll_increment = 600
-            max_scroll = 2000000  # Safety limit
-            no_new_photos_count = 0
+            max_scroll = 2000000
 
-            from selenium.webdriver.common.keys import Keys
-            from selenium.webdriver.common.action_chains import ActionChains
+            containers_seen = 0
+            urls_matched = 0
+            urls_not_in_fetch = 0
 
-            while urls_found < urls_needed and scroll_position < max_scroll:
-                # Google Photos renders photos as divs with background-image
-                # Find photo containers using data-latest-bg attribute
+            while total_found < urls_needed and scroll_position < max_scroll:
                 photo_containers = driver.find_elements(By.CSS_SELECTOR, "[data-latest-bg]")
+                containers_seen = max(containers_seen, len(photo_containers))
 
                 for container in photo_containers:
                     try:
-                        # Get the background-image URL from the element's style
                         bg_url = driver.execute_script(
                             "return window.getComputedStyle(arguments[0]).backgroundImage;",
                             container
@@ -698,7 +710,6 @@ class AlbumScraper:
                         if not bg_url or bg_url == 'none':
                             continue
 
-                        # Extract URL from "url(...)"
                         if bg_url.startswith('url("'):
                             bg_url = bg_url[5:-2]
                         elif bg_url.startswith("url('"):
@@ -706,40 +717,56 @@ class AlbumScraper:
 
                         base_url = self._extract_base_url(bg_url)
 
-                        if not base_url or base_url in processed_urls:
+                        if not base_url:
+                            continue
+
+                        if base_url not in urls_to_fetch:
+                            urls_not_in_fetch += 1
+                            continue
+
+                        urls_matched += 1
+
+                        # Skip if already processed
+                        if base_url in captions or base_url in processed_urls:
                             continue
 
                         processed_urls.add(base_url)
 
-                        if base_url not in urls_to_fetch:
-                            continue
-
-                        # Click on this photo to open detail view
+                        # Click photo to open detail view
                         container.click()
                         time.sleep(2)
 
-                        # Extract caption from detail view
+                        # Extract caption
                         caption = self._extract_caption_from_detail_view(driver)
                         captions[base_url] = caption
+                        total_found += 1
 
-                        urls_found += 1
+                        # Log progress every photo for debugging
+                        if total_found <= 10 or total_found % 50 == 0:
+                            logger.info(f"Processed photo {total_found}: caption={'yes' if caption else 'no'}")
 
                         if caption:
-                            logger.debug(f"Found caption: {caption[:50]}...")
+                            logger.info(f"Caption found: {caption[:60]}...")
+
+                        # Call callback to save caption immediately
+                        if caption_found_callback:
+                            try:
+                                caption_found_callback(base_url, caption)
+                            except Exception as e:
+                                logger.warning(f"Error in caption callback: {e}")
 
                         if progress_callback:
                             try:
-                                progress_callback(urls_found, urls_needed)
+                                progress_callback(total_found, urls_needed)
                             except Exception:
                                 pass
 
-                        # Close detail view (press Escape)
+                        # Close detail view
                         driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
                         time.sleep(1)
 
                     except Exception as e:
-                        logger.debug(f"Error extracting caption for photo: {e}")
-                        # Try to close any open detail view
+                        logger.warning(f"Error extracting caption for photo: {e}")
                         try:
                             driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
                             time.sleep(0.5)
@@ -747,19 +774,7 @@ class AlbumScraper:
                             pass
                         continue
 
-                # Check if we found new photos in this scroll position
-                old_count = urls_found
-                if urls_found == old_count:
-                    no_new_photos_count += 1
-                else:
-                    no_new_photos_count = 0
-
-                # Stop if we've scrolled a lot without finding new photos
-                if no_new_photos_count > 20:
-                    logger.debug("No new photos found after extended scrolling, stopping")
-                    break
-
-                # Scroll down to find more photos
+                # Scroll down
                 scroll_position += scroll_increment
                 driver.execute_script(
                     "arguments[0].scrollTop = arguments[1]",
@@ -768,12 +783,24 @@ class AlbumScraper:
                 )
                 time.sleep(0.8)
 
-            logger.info(f"Fetched captions for {urls_found}/{urls_needed} photos")
-            return captions
+                # Check if we've reached the end
+                actual_scroll = driver.execute_script(
+                    "return arguments[0].scrollTop", scroll_container
+                )
+                if scroll_position > 5000 and actual_scroll < scroll_position - 1000:
+                    logger.info(f"Reached end of album at scroll position {scroll_position}")
+                    break
+
+            captions_found = sum(1 for c in captions.values() if c)
+            logger.info(
+                f"Caption fetch complete: {total_found}/{urls_needed} processed, "
+                f"{captions_found} captions found, "
+                f"{containers_seen} containers seen, {urls_matched} matched, "
+                f"{urls_not_in_fetch} not in fetch set"
+            )
 
         except Exception as e:
             logger.error(f"Error fetching captions: {e}")
-            return captions
 
         finally:
             if driver:
@@ -782,6 +809,8 @@ class AlbumScraper:
                 except Exception:
                     pass
             gc.collect()
+
+        return captions
 
     def _extract_caption_from_detail_view(self, driver: webdriver.Chrome) -> Optional[str]:
         """
@@ -816,7 +845,7 @@ class AlbumScraper:
             page_text = driver.find_element(By.TAG_NAME, 'body').text
             lines = [l.strip() for l in page_text.split('\n') if l.strip()]
 
-            # Skip patterns for UI elements
+            # Skip patterns for UI elements and metadata
             skip_patterns = [
                 'share', 'download', 'edit', 'delete', 'photo', 'video',
                 'zoom', 'add to', 'create', 'more', 'options', 'back',
@@ -825,13 +854,22 @@ class AlbumScraper:
                 'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun',
                 'gmt', 'pst', 'pdt', 'est', 'edt', 'cst', 'cdt', 'mst', 'mdt',
                 'google pixel', 'iphone', 'samsung', 'canon', 'nikon', 'sony',
-                'ƒ/', 'mm', 'iso'  # Camera metadata
+                'ƒ/', 'mm', 'iso',  # Camera metadata
+                'shared by', 'ilce',  # Sharing info, Sony camera model
             ]
 
-            # Also skip lines that look like dates or times
+            # Also skip lines that look like dates, times, or filenames
             import re
             date_pattern = re.compile(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{1,2}[/\-]\d{1,2}|\d{4})', re.I)
             time_pattern = re.compile(r'^\d{1,2}:\d{2}')
+            # Filename patterns: ends with image extension or starts with camera prefixes
+            filename_pattern = re.compile(
+                r'\.(jpg|jpeg|png|heic|heif|gif|webp|raw|cr2|nef|arw|dng)$|'
+                r'^(DSC|IMG|PXL|DCIM|P\d{7}|_DSC|_MG_|DSCN|SAM_|GOPR|DJI_)',
+                re.I
+            )
+            # Dimension patterns: "4898 × 3265", "16MP", etc.
+            dimension_pattern = re.compile(r'^\d+\s*[×x]\s*\d+$|^\d+(\.\d+)?\s*MP$', re.I)
 
             for line in lines:
                 line_lower = line.lower()
@@ -850,6 +888,14 @@ class AlbumScraper:
 
                 # Skip lines that look like dates or times
                 if date_pattern.match(line) or time_pattern.match(line):
+                    continue
+
+                # Skip lines that look like filenames
+                if filename_pattern.search(line):
+                    continue
+
+                # Skip image dimensions like "4898 × 3265" or "16MP"
+                if dimension_pattern.match(line):
                     continue
 
                 # Skip the word "Info" by itself

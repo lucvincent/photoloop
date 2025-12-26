@@ -257,7 +257,11 @@ class CacheManager:
                     self._media = {}
 
     def _save_metadata(self) -> None:
-        """Save metadata to disk."""
+        """Save metadata to disk atomically.
+
+        Writes to a temp file first, then renames to prevent corruption
+        if the write is interrupted.
+        """
         with self._lock:
             try:
                 data = {
@@ -279,8 +283,13 @@ class CacheManager:
                         }
                     }
                 }
-                with open(self.metadata_path, 'w') as f:
+                # Write to temp file first, then rename atomically
+                temp_path = self.metadata_path + '.tmp'
+                with open(temp_path, 'w') as f:
                     json.dump(data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())  # Ensure data is written to disk
+                os.replace(temp_path, self.metadata_path)  # Atomic rename
             except Exception as e:
                 logger.error(f"Failed to save metadata: {e}")
 
@@ -553,6 +562,35 @@ class CacheManager:
         if urls_needing_captions and albums_scraped_successfully > 0:
             self._sync_progress.stage = "fetching_captions"
 
+            # Counter for batched saves
+            captions_since_save = [0]  # Use list to allow modification in nested function
+
+            # Callback to save each caption immediately
+            def on_caption_found(url: str, google_caption: Optional[str]) -> None:
+                media_id = self._get_media_id(url)
+                with self._lock:
+                    if media_id not in self._media:
+                        return
+
+                    embedded_caption = embedded_captions.get(url)
+
+                    # Apply caption based on precedence setting
+                    if caption_precedence == "google_photos":
+                        final_caption = google_caption or embedded_caption
+                    else:
+                        final_caption = embedded_caption or google_caption
+
+                    if final_caption and final_caption != self._media[media_id].caption:
+                        self._media[media_id].caption = final_caption
+                        stats["captions_updated"] += 1
+
+                    # Save to disk every 10 captions to avoid data loss
+                    captions_since_save[0] += 1
+                    if captions_since_save[0] >= 10:
+                        self._save_metadata()
+                        captions_since_save[0] = 0
+                        logger.info(f"Saved metadata (captions updated: {stats['captions_updated']})")
+
             # Group URLs by album for efficient fetching
             for album in self.config.albums:
                 if not album.url:
@@ -567,31 +605,20 @@ class CacheManager:
                     google_captions = self._scraper.fetch_captions(
                         album.url,
                         urls_needing_captions,
-                        progress_callback=caption_progress
+                        progress_callback=caption_progress,
+                        caption_found_callback=on_caption_found
                     )
 
-                    # Update cached items with fetched captions based on precedence
-                    with self._lock:
-                        for url, google_caption in google_captions.items():
-                            media_id = self._get_media_id(url)
-                            if media_id not in self._media:
-                                continue
-
-                            embedded_caption = embedded_captions.get(url)
-
-                            # Apply caption based on precedence setting
-                            if caption_precedence == "google_photos":
-                                # Google Photos first, fall back to embedded
-                                final_caption = google_caption or embedded_caption
-                            else:
-                                # Embedded first, fall back to Google Photos
-                                final_caption = embedded_caption or google_caption
-
-                            if final_caption and final_caption != self._media[media_id].caption:
-                                self._media[media_id].caption = final_caption
-                                stats["captions_updated"] += 1
+                    # Final save for any remaining captions
+                    if captions_since_save[0] > 0:
+                        with self._lock:
+                            self._save_metadata()
+                        logger.info(f"Final caption save (total updated: {stats['captions_updated']})")
 
                 except Exception as e:
+                    # Save what we have before reporting the error
+                    with self._lock:
+                        self._save_metadata()
                     logger.warning(f"Failed to fetch captions from album {album.url}: {e}")
 
         # Mark items not seen as deleted - but ONLY if the scrape looks healthy.
