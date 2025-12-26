@@ -646,6 +646,7 @@ class AlbumScraper:
 
         captions: Dict[str, Optional[str]] = {}
         driver = None
+        processed_urls: Set[str] = set()
 
         logger.info(f"Fetching captions for {len(urls_to_fetch)} photos...")
 
@@ -674,76 +675,87 @@ class AlbumScraper:
             urls_found = 0
             urls_needed = len(urls_to_fetch)
             scroll_position = 0
-            scroll_increment = 800
+            scroll_increment = 600
             max_scroll = 2000000  # Safety limit
             no_new_photos_count = 0
 
+            from selenium.webdriver.common.keys import Keys
+            from selenium.webdriver.common.action_chains import ActionChains
+
             while urls_found < urls_needed and scroll_position < max_scroll:
-                # Get all visible photo elements
-                photo_elements = driver.execute_script("""
-                    var imgs = document.querySelectorAll('img[src*="googleusercontent.com/pw/"]');
-                    var result = [];
-                    for (var i = 0; i < imgs.length; i++) {
-                        var rect = imgs[i].getBoundingClientRect();
-                        if (rect.top >= 0 && rect.bottom <= window.innerHeight) {
-                            result.push({
-                                element: imgs[i],
-                                src: imgs[i].src
-                            });
-                        }
-                    }
-                    return result;
-                """)
+                # Google Photos renders photos as divs with background-image
+                # Find photo containers using data-latest-bg attribute
+                photo_containers = driver.find_elements(By.CSS_SELECTOR, "[data-latest-bg]")
 
-                found_new = False
-                for photo_data in photo_elements:
+                for container in photo_containers:
                     try:
-                        src = photo_data.get('src', '')
-                        base_url = self._extract_base_url(src)
+                        # Get the background-image URL from the element's style
+                        bg_url = driver.execute_script(
+                            "return window.getComputedStyle(arguments[0]).backgroundImage;",
+                            container
+                        )
 
-                        if base_url and base_url in urls_to_fetch and base_url not in captions:
-                            # Click on this photo to open detail view
-                            img_element = driver.execute_script(
-                                "return document.querySelector('img[src=\"' + arguments[0] + '\"]');",
-                                src
-                            )
+                        if not bg_url or bg_url == 'none':
+                            continue
 
-                            if img_element:
-                                img_element.click()
-                                time.sleep(2)
+                        # Extract URL from "url(...)"
+                        if bg_url.startswith('url("'):
+                            bg_url = bg_url[5:-2]
+                        elif bg_url.startswith("url('"):
+                            bg_url = bg_url[5:-2]
 
-                                # Extract caption from detail view
-                                caption = self._extract_caption_from_detail_view(driver)
-                                captions[base_url] = caption
+                        base_url = self._extract_base_url(bg_url)
 
-                                urls_found += 1
-                                found_new = True
+                        if not base_url or base_url in processed_urls:
+                            continue
 
-                                if caption:
-                                    logger.debug(f"Found caption for photo: {caption[:50]}...")
+                        processed_urls.add(base_url)
 
-                                if progress_callback:
-                                    try:
-                                        progress_callback(urls_found, urls_needed)
-                                    except Exception:
-                                        pass
+                        if base_url not in urls_to_fetch:
+                            continue
 
-                                # Close detail view (press Escape)
-                                from selenium.webdriver.common.keys import Keys
-                                driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-                                time.sleep(1)
+                        # Click on this photo to open detail view
+                        container.click()
+                        time.sleep(2)
+
+                        # Extract caption from detail view
+                        caption = self._extract_caption_from_detail_view(driver)
+                        captions[base_url] = caption
+
+                        urls_found += 1
+
+                        if caption:
+                            logger.debug(f"Found caption: {caption[:50]}...")
+
+                        if progress_callback:
+                            try:
+                                progress_callback(urls_found, urls_needed)
+                            except Exception:
+                                pass
+
+                        # Close detail view (press Escape)
+                        driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                        time.sleep(1)
 
                     except Exception as e:
                         logger.debug(f"Error extracting caption for photo: {e}")
+                        # Try to close any open detail view
+                        try:
+                            driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                            time.sleep(0.5)
+                        except Exception:
+                            pass
                         continue
 
-                if found_new:
-                    no_new_photos_count = 0
-                else:
+                # Check if we found new photos in this scroll position
+                old_count = urls_found
+                if urls_found == old_count:
                     no_new_photos_count += 1
+                else:
+                    no_new_photos_count = 0
 
                 # Stop if we've scrolled a lot without finding new photos
-                if no_new_photos_count > 30:
+                if no_new_photos_count > 20:
                     logger.debug("No new photos found after extended scrolling, stopping")
                     break
 
@@ -754,7 +766,7 @@ class AlbumScraper:
                     scroll_container,
                     scroll_position
                 )
-                time.sleep(0.5)
+                time.sleep(0.8)
 
             logger.info(f"Fetched captions for {urls_found}/{urls_needed} photos")
             return captions
@@ -782,59 +794,74 @@ class AlbumScraper:
             Caption string or None if not found.
         """
         try:
-            # Try to find the info button and click it
+            from selenium.webdriver.common.action_chains import ActionChains
+
+            # Try to find and click the info button
             info_buttons = driver.find_elements(
                 By.CSS_SELECTOR,
-                "[aria-label*='Info'], [aria-label*='info'], [data-tooltip*='Info']"
+                "[aria-label*='Info'], [aria-label*='info'], [aria-label='Open info'], "
+                "[data-tooltip*='Info'], [aria-label*='Details']"
             )
 
             if info_buttons:
                 info_buttons[0].click()
                 time.sleep(1)
+            else:
+                # Try pressing 'i' key to open info panel
+                ActionChains(driver).send_keys('i').perform()
+                time.sleep(1)
 
-            # Look for description/caption in the info panel
-            # Google Photos uses various selectors for the description field
-            caption_selectors = [
-                # Description field in info panel
-                "[aria-label*='description']",
-                "[aria-label*='Description']",
-                "[data-type='description']",
-                # Text areas that might contain captions
-                "textarea[aria-label*='description']",
-                "div[aria-label*='description']",
-                # Common class patterns
-                "[class*='description']",
-                "[class*='caption']",
+            # Get the page text and look for caption
+            # The caption appears after "Info" and before "Details" in Google Photos
+            page_text = driver.find_element(By.TAG_NAME, 'body').text
+            lines = [l.strip() for l in page_text.split('\n') if l.strip()]
+
+            # Skip patterns for UI elements
+            skip_patterns = [
+                'share', 'download', 'edit', 'delete', 'photo', 'video',
+                'zoom', 'add to', 'create', 'more', 'options', 'back',
+                'open info', 'say something', 'details', 'used in',
+                'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+                'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun',
+                'gmt', 'pst', 'pdt', 'est', 'edt', 'cst', 'cdt', 'mst', 'mdt',
+                'google pixel', 'iphone', 'samsung', 'canon', 'nikon', 'sony',
+                'ƒ/', 'mm', 'iso'  # Camera metadata
             ]
 
-            for selector in caption_selectors:
-                try:
-                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in elements:
-                        text = elem.text or elem.get_attribute('value') or elem.get_attribute('aria-label')
-                        if text and len(text) > 2 and len(text) < 1000:
-                            # Filter out UI labels
-                            if text.lower() not in ['description', 'add a description', 'caption']:
-                                return text.strip()
-                except Exception:
+            # Also skip lines that look like dates or times
+            import re
+            date_pattern = re.compile(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{1,2}[/\-]\d{1,2}|\d{4})', re.I)
+            time_pattern = re.compile(r'^\d{1,2}:\d{2}')
+
+            for line in lines:
+                line_lower = line.lower()
+
+                # Skip short lines
+                if len(line) < 5:
                     continue
 
-            # Also try searching the page for any visible text that looks like a caption
-            # (visible in the detail view, not in the grid)
-            try:
-                page_text = driver.find_element(By.TAG_NAME, 'body').text
-                lines = [l.strip() for l in page_text.split('\n') if l.strip()]
-                # Look for lines that seem like captions (not too short, not too long, not UI text)
-                skip_patterns = ['share', 'download', 'edit', 'delete', 'info', 'photo',
-                                 'video', 'zoom', 'add to', 'create', 'more', 'options']
-                for line in lines:
-                    if (10 < len(line) < 500 and
-                        not any(p in line.lower() for p in skip_patterns) and
-                        not line.startswith('http')):
-                        # This might be a caption
-                        return line
-            except Exception:
-                pass
+                # Skip very long lines (likely not captions)
+                if len(line) > 500:
+                    continue
+
+                # Skip UI elements
+                if any(p in line_lower for p in skip_patterns):
+                    continue
+
+                # Skip lines that look like dates or times
+                if date_pattern.match(line) or time_pattern.match(line):
+                    continue
+
+                # Skip the word "Info" by itself
+                if line_lower == 'info':
+                    continue
+
+                # Skip lines that are just numbers
+                if line.replace(',', '').replace('.', '').isdigit():
+                    continue
+
+                # This looks like a caption!
+                return line
 
             return None
 
