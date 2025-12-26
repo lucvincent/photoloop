@@ -834,11 +834,11 @@ class AlbumScraper:
 
             if info_buttons:
                 info_buttons[0].click()
-                time.sleep(1)
+                time.sleep(1.5)  # Allow time for info panel to load
             else:
                 # Try pressing 'i' key to open info panel
                 ActionChains(driver).send_keys('i').perform()
-                time.sleep(1)
+                time.sleep(1.5)  # Allow time for info panel to load
 
             # Get the page text and look for caption
             # The caption appears after "Info" and before "Details" in Google Photos
@@ -909,6 +909,10 @@ class AlbumScraper:
                 # This looks like a caption!
                 return line
 
+            # Debug: log first few candidate lines when no caption found
+            candidates = [l for l in lines if 5 <= len(l) <= 500][:5]
+            if candidates:
+                logger.info(f"Caption extraction - sample lines: {candidates[:3]}")
             return None
 
         except Exception as e:

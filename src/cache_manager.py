@@ -284,7 +284,7 @@ class CacheManager:
                     }
                 }
                 # Write to temp file first, then rename atomically
-                temp_path = self.metadata_path + '.tmp'
+                temp_path = str(self.metadata_path) + '.tmp'
                 with open(temp_path, 'w') as f:
                     json.dump(data, f, indent=2)
                     f.flush()
