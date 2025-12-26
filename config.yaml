@@ -35,11 +35,31 @@ albums:
 # Sync Settings - How often to check for new photos/videos
 # ------------------------------------------------------------
 sync:
-  interval_minutes: 60       # Check albums for new content (0 = manual only)
-  full_resolution: true      # true = original quality
-                             # false = limit to max_dimension
+  # How often to automatically sync albums (in minutes)
+  # Default: 1440 (24 hours) - syncing is slow due to caption fetching
+  # Set to 0 for manual sync only (via web interface or CLI)
+  # Tradeoff: More frequent = more up-to-date, but uses more bandwidth/CPU
+  interval_minutes: 1440
+
+  # Download resolution
+  # true = original quality (larger files, best quality)
+  # false = limit to max_dimension (smaller files, faster downloads)
+  # Tradeoff: Full resolution uses more storage but looks better on 4K displays
+  full_resolution: true
   max_dimension: 1920        # Max width/height if full_resolution is false
                              # Use 3840 for 4K displays
+
+  # Caption source precedence - which caption to use when both exist
+  # Options:
+  #   "google_photos" - Prefer Google Photos caption, fall back to embedded EXIF/IPTC
+  #   "embedded"      - Prefer embedded EXIF/IPTC caption, fall back to Google Photos
+  #
+  # Tradeoff:
+  #   - "google_photos" (default): Better for intentionally-added captions in Google Photos,
+  #     but requires fetching captions (slower sync, ~3-5 sec per new photo)
+  #   - "embedded": Faster sync (no caption fetching), but may show camera/software
+  #     metadata instead of user-added descriptions
+  caption_precedence: "google_photos"
 
 # ------------------------------------------------------------
 # Display Settings - Slideshow appearance and behavior
@@ -84,10 +104,17 @@ scaling:
   # background_color: [32, 32, 32]  # Dark gray bars
 
   # Smart cropping (applies to fill and balanced modes)
-  smart_crop: true                 # Enable intelligent crop region selection
+  # Tradeoff: Enabled = better framing but slightly slower image processing
+  smart_crop: true
 
   # Face detection for smart cropping
   # When enabled, crops will try to keep faces visible and well-positioned
+  # Uses YuNet neural network model for accurate detection
+  #
+  # Tradeoff:
+  #   - true: Faces stay visible in cropped photos, but adds ~50-100ms
+  #     processing time per photo and uses more CPU
+  #   - false: Faster processing, but faces may be partially cropped
   face_detection: true
 
   # Where to position detected faces after cropping
@@ -106,20 +133,26 @@ scaling:
 # ------------------------------------------------------------
 # The Ken Burns effect adds subtle motion to still photos by slowly
 # zooming and panning. This creates a more engaging viewing experience.
+#
+# Tradeoff: Enabled = more cinematic feel but uses slightly more CPU;
+# Disabled = static display, lower power consumption
 ken_burns:
   enabled: true
 
   # Zoom range: [minimum, maximum]
   # 1.0 = no zoom, 1.15 = 15% zoom in
   # The effect will zoom between these values
+  # Tradeoff: Larger range = more dramatic effect but may crop important edges
   zoom_range: [1.0, 1.15]
 
   # Pan speed as fraction of image dimension per second
   # 0.02 = move 2% of image width/height per second
+  # Tradeoff: Higher = more noticeable motion; Lower = subtler, calmer effect
   pan_speed: 0.02
 
   # Randomize zoom direction and pan path
-  # If false, uses preset patterns that alternate
+  # true = varied, unpredictable motion
+  # false = consistent, repeating patterns
   randomize: true
 
 # ------------------------------------------------------------
@@ -163,14 +196,21 @@ overlay:
 # Schedule - When to display slideshow vs off-hours mode
 # ------------------------------------------------------------
 # Configure when the slideshow runs. Outside scheduled hours,
-# the display will show either a black screen or a clock.
+# the display will either power off or show a clock.
 schedule:
   enabled: true
 
-  # What to show outside scheduled hours
+  # What to do outside scheduled hours
   # Options:
-  #   "black" - Turn display black (saves energy)
-  #   "clock" - Show a simple clock
+  #   "black" - Power off the display (saves electricity)
+  #             Uses DDC/CI for monitors or HDMI-CEC for TVs
+  #             Falls back to black screen if neither available
+  #   "clock" - Keep display on and show a simple clock
+  #
+  # Tradeoff:
+  #   - "black": Saves power, extends display lifespan, but display takes
+  #     a few seconds to wake up when schedule resumes
+  #   - "clock": Always-on display, instant slideshow start, but uses more power
   off_hours_mode: "black"
 
   # Weekday schedule (Monday through Friday)
@@ -205,7 +245,14 @@ cache:
 
   # Maximum cache size in megabytes
   # When exceeded, oldest photos (by last_seen date) are removed
-  # Recommended: At least 500 MB, more for 4K photos
+  #
+  # Sizing guide:
+  #   - 1080p photos: ~2-5 MB each → 1000 MB ≈ 200-500 photos
+  #   - 4K photos: ~8-15 MB each → 1000 MB ≈ 65-125 photos
+  #   - With full_resolution: true, photos can be 10-20+ MB each
+  #
+  # Tradeoff: Larger cache = more photos available offline,
+  # but uses more SD card space (check with 'df -h')
   max_size_mb: 1000
 
 # ------------------------------------------------------------

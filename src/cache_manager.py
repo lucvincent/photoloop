@@ -373,12 +373,13 @@ class CacheManager:
                 local_path.unlink()
             return None
 
-    def sync(self, force_full: bool = False) -> Dict[str, int]:
+    def sync(self, force_full: bool = False, update_all_captions: bool = False) -> Dict[str, int]:
         """
         Sync cache with Google Photos albums.
 
         Args:
             force_full: Force re-download of all items.
+            update_all_captions: If True, fetch captions for all photos (not just new ones).
 
         Returns:
             Statistics dict with counts of new/updated/deleted items.
@@ -391,13 +392,13 @@ class CacheManager:
             return stats
 
         try:
-            return self._do_sync(force_full)
+            return self._do_sync(force_full, update_all_captions)
         finally:
             self._sync_lock.release()
 
-    def _do_sync(self, force_full: bool = False) -> Dict[str, int]:
+    def _do_sync(self, force_full: bool = False, update_all_captions: bool = False) -> Dict[str, int]:
         """Internal sync implementation."""
-        stats = {"new": 0, "updated": 0, "deleted": 0, "unchanged": 0, "errors": 0}
+        stats = {"new": 0, "updated": 0, "deleted": 0, "unchanged": 0, "errors": 0, "captions_updated": 0}
 
         logger.info("Starting album sync...")
 
@@ -454,6 +455,9 @@ class CacheManager:
         self._sync_progress.downloads_total = items_to_download
         self._sync_progress.downloads_done = 0
 
+        # Track URLs of newly downloaded photos for caption fetching
+        new_photo_urls: Set[str] = set()
+
         with self._lock:
             for item in all_items:
                 media_id = self._get_media_id(item.url)
@@ -479,25 +483,26 @@ class CacheManager:
                     if local_path:
                         # Extract metadata
                         exif_date = None
+                        embedded_caption = None
                         if item.media_type == "photo":
                             try:
                                 metadata = self._metadata_extractor.extract(local_path)
                                 if metadata.date_taken:
                                     exif_date = metadata.date_taken.isoformat()
-
-                                # Get caption from EXIF if not from Google
-                                if not item.caption and metadata.caption:
-                                    item.caption = metadata.caption
+                                # Store embedded caption separately
+                                embedded_caption = metadata.caption
                             except Exception as e:
                                 logger.debug(f"Failed to extract metadata: {e}")
 
                         # Create cache entry
+                        # For now, use embedded caption; Google Photos caption will be fetched later
+                        # and applied based on caption_precedence config
                         cached = CachedMedia(
                             media_id=media_id,
                             url=item.url,
                             local_path=local_path,
                             media_type=item.media_type,
-                            caption=item.caption,
+                            caption=embedded_caption,  # Start with embedded, may be updated
                             exif_date=exif_date,
                             album_source=self.config.albums[0].name if self.config.albums else "",
                             download_date=now,
@@ -509,19 +514,96 @@ class CacheManager:
                         self._media[media_id] = cached
                         stats["new"] += 1
                         self._sync_progress.downloads_done += 1
+
+                        # Always track new photos for Google Photos caption fetching
+                        if item.media_type == "photo":
+                            new_photo_urls.add(item.url)
                     else:
                         stats["errors"] += 1
                         self._sync_progress.downloads_done += 1
 
-            # Mark items not seen as deleted - but ONLY if the scrape looks healthy.
-            # This prevents marking everything as deleted when the scraper fails
-            # (e.g., ChromeDriver crash, network error, page load timeout).
-            #
-            # We require finding at least 50% of our current cached items.
-            # This handles:
-            #   - Complete failures (0 items found)
-            #   - Partial failures (only a few items scraped before timeout)
-            #   - Normal changes (some photos added/removed from album)
+        # Fetch captions from Google Photos for new photos or all photos if requested
+        urls_needing_captions: Set[str] = set()
+        # Track embedded captions so we can apply precedence later
+        embedded_captions: Dict[str, Optional[str]] = {}
+
+        if update_all_captions:
+            # Fetch captions for all photos
+            with self._lock:
+                for cached in self._media.values():
+                    if cached.media_type == "photo" and not cached.deleted:
+                        urls_needing_captions.add(cached.url)
+                        embedded_captions[cached.url] = cached.caption
+            logger.info(f"Updating captions for all {len(urls_needing_captions)} photos...")
+        else:
+            # Only fetch captions for newly downloaded photos
+            urls_needing_captions = new_photo_urls
+            # Track embedded captions for new photos
+            with self._lock:
+                for url in new_photo_urls:
+                    media_id = self._get_media_id(url)
+                    if media_id in self._media:
+                        embedded_captions[url] = self._media[media_id].caption
+            if urls_needing_captions:
+                logger.info(f"Fetching captions for {len(urls_needing_captions)} new photos...")
+
+        # Get caption precedence setting
+        caption_precedence = getattr(self.config.sync, 'caption_precedence', 'google_photos')
+
+        if urls_needing_captions and albums_scraped_successfully > 0:
+            self._sync_progress.stage = "fetching_captions"
+
+            # Group URLs by album for efficient fetching
+            for album in self.config.albums:
+                if not album.url:
+                    continue
+
+                try:
+                    # Fetch captions for photos in this album
+                    def caption_progress(current: int, total: int) -> None:
+                        self._sync_progress.downloads_done = current
+                        self._sync_progress.downloads_total = total
+
+                    google_captions = self._scraper.fetch_captions(
+                        album.url,
+                        urls_needing_captions,
+                        progress_callback=caption_progress
+                    )
+
+                    # Update cached items with fetched captions based on precedence
+                    with self._lock:
+                        for url, google_caption in google_captions.items():
+                            media_id = self._get_media_id(url)
+                            if media_id not in self._media:
+                                continue
+
+                            embedded_caption = embedded_captions.get(url)
+
+                            # Apply caption based on precedence setting
+                            if caption_precedence == "google_photos":
+                                # Google Photos first, fall back to embedded
+                                final_caption = google_caption or embedded_caption
+                            else:
+                                # Embedded first, fall back to Google Photos
+                                final_caption = embedded_caption or google_caption
+
+                            if final_caption and final_caption != self._media[media_id].caption:
+                                self._media[media_id].caption = final_caption
+                                stats["captions_updated"] += 1
+
+                except Exception as e:
+                    logger.warning(f"Failed to fetch captions from album {album.url}: {e}")
+
+        # Mark items not seen as deleted - but ONLY if the scrape looks healthy.
+        # This prevents marking everything as deleted when the scraper fails
+        # (e.g., ChromeDriver crash, network error, page load timeout).
+        #
+        # We require finding at least 50% of our current cached items.
+        # This handles:
+        #   - Complete failures (0 items found)
+        #   - Partial failures (only a few items scraped before timeout)
+        #   - Normal changes (some photos added/removed from album)
+        with self._lock:
             current_cached_count = sum(1 for c in self._media.values() if not c.deleted)
             min_required = max(1, int(current_cached_count * 0.5))  # At least 50% of current
 
@@ -552,11 +634,18 @@ class CacheManager:
         # Manage cache size
         self._enforce_cache_limit()
 
-        logger.info(
-            f"Sync complete: {stats['new']} new, {stats['updated']} updated, "
-            f"{stats['deleted']} deleted, {stats['unchanged']} unchanged, "
+        # Build log message
+        log_parts = [
+            f"{stats['new']} new",
+            f"{stats['updated']} updated",
+            f"{stats['deleted']} deleted",
+            f"{stats['unchanged']} unchanged",
             f"{stats['errors']} errors"
-        )
+        ]
+        if stats['captions_updated'] > 0:
+            log_parts.append(f"{stats['captions_updated']} captions fetched")
+
+        logger.info(f"Sync complete: {', '.join(log_parts)}")
 
         # Mark sync as complete
         self._sync_progress.is_syncing = False

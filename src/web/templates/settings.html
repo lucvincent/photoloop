@@ -57,6 +57,15 @@
 
             <div class="sync-section">
                 <h3>Album Sync</h3>
+                <div class="form-group" style="margin-bottom: 10px;">
+                    <label>
+                        <input type="checkbox" id="update-all-captions">
+                        Update all captions from Google Photos
+                    </label>
+                    <div style="font-size: 0.85em; color: var(--text-muted); margin-top: 4px; margin-left: 26px;">
+                        Check this to re-fetch captions for all photos (slower). Otherwise, only new photos get captions.
+                    </div>
+                </div>
                 <button id="btn-sync" class="btn btn-primary">Sync Now</button>
             </div>
             <div id="sync-progress" style="display: none; margin-top: 15px; padding: 15px; background: #16213e; border-radius: 8px; border: 1px solid #333;">
@@ -360,6 +369,16 @@
                         progressBar.style.background = '#4CAF50';
                         progressBar.style.animation = 'none';
                         progressText.textContent = pct + '%';
+                    } else if (progress.stage === 'fetching_captions') {
+                        stageDiv.textContent = 'Fetching captions from Google Photos...';
+                        const pct = progress.downloads_total > 0
+                            ? Math.round((progress.downloads_done / progress.downloads_total) * 100)
+                            : 0;
+                        detailsDiv.textContent = `${progress.downloads_done} of ${progress.downloads_total} photos`;
+                        progressBar.style.width = pct + '%';
+                        progressBar.style.background = 'linear-gradient(90deg, var(--sage-primary), var(--sage-light))';
+                        progressBar.style.animation = 'none';
+                        progressText.textContent = pct + '%';
                     }
                 } else if (progress.stage === 'complete') {
                     stageDiv.textContent = 'Sync complete!';
@@ -403,6 +422,7 @@
             const stageDiv = document.getElementById('sync-stage');
             const detailsDiv = document.getElementById('sync-details');
             const progressBar = document.getElementById('sync-progress-bar');
+            const updateAllCaptions = document.getElementById('update-all-captions').checked;
 
             // Show progress immediately
             progressDiv.style.display = 'block';
@@ -413,7 +433,7 @@
             document.getElementById('btn-sync').disabled = true;
             document.getElementById('btn-sync').textContent = 'Syncing...';
 
-            await apiCall('/api/sync', 'POST');
+            await apiCall('/api/sync', 'POST', { update_all_captions: updateAllCaptions });
 
             // Start polling for progress
             if (!syncPollInterval) {

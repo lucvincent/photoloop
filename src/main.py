@@ -228,12 +228,15 @@ class PhotoLoop:
         except Exception as e:
             logger.error(f"Error reloading config: {e}")
 
-    def _on_sync_request(self) -> None:
+    def _on_sync_request(self, update_all_captions: bool = False) -> None:
         """Handle sync request from web interface."""
         def do_sync():
             try:
-                logger.info("Manual sync requested...")
-                self.cache_manager.sync()
+                if update_all_captions:
+                    logger.info("Manual sync requested (with caption update for all photos)...")
+                else:
+                    logger.info("Manual sync requested...")
+                self.cache_manager.sync(update_all_captions=update_all_captions)
                 logger.info("Manual sync completed")
             except Exception as e:
                 logger.error(f"Manual sync error: {e}")

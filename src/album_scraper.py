@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 from urllib.parse import urlparse, urljoin
 
 from selenium import webdriver
@@ -620,6 +620,227 @@ class AlbumScraper:
             URL that will return image at specified size.
         """
         return f"{base_url}=w{width}-h{height}"
+
+    def fetch_captions(
+        self,
+        album_url: str,
+        urls_to_fetch: Set[str],
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> Dict[str, Optional[str]]:
+        """
+        Fetch captions for specific photo URLs from a Google Photos album.
+
+        This method opens each photo's detail view to extract its caption.
+        It's slower than scraping but necessary since captions aren't in the grid view.
+
+        Args:
+            album_url: URL of the Google Photos album.
+            urls_to_fetch: Set of base URLs to fetch captions for.
+            progress_callback: Optional callback(current, total) for progress updates.
+
+        Returns:
+            Dict mapping base URLs to their captions (None if no caption).
+        """
+        if not urls_to_fetch:
+            return {}
+
+        captions: Dict[str, Optional[str]] = {}
+        driver = None
+
+        logger.info(f"Fetching captions for {len(urls_to_fetch)} photos...")
+
+        try:
+            driver = self._init_driver()
+            driver.get(album_url)
+
+            # Wait for page to load
+            time.sleep(5)
+
+            # Find the scroll container
+            scroll_container = driver.execute_script("""
+                var cwiz = document.querySelectorAll('c-wiz');
+                for (var i = 0; i < cwiz.length; i++) {
+                    if (cwiz[i].scrollHeight > 1000) {
+                        return cwiz[i];
+                    }
+                }
+                return null;
+            """)
+
+            if not scroll_container:
+                logger.warning("Could not find scroll container for caption extraction")
+                return captions
+
+            urls_found = 0
+            urls_needed = len(urls_to_fetch)
+            scroll_position = 0
+            scroll_increment = 800
+            max_scroll = 2000000  # Safety limit
+            no_new_photos_count = 0
+
+            while urls_found < urls_needed and scroll_position < max_scroll:
+                # Get all visible photo elements
+                photo_elements = driver.execute_script("""
+                    var imgs = document.querySelectorAll('img[src*="googleusercontent.com/pw/"]');
+                    var result = [];
+                    for (var i = 0; i < imgs.length; i++) {
+                        var rect = imgs[i].getBoundingClientRect();
+                        if (rect.top >= 0 && rect.bottom <= window.innerHeight) {
+                            result.push({
+                                element: imgs[i],
+                                src: imgs[i].src
+                            });
+                        }
+                    }
+                    return result;
+                """)
+
+                found_new = False
+                for photo_data in photo_elements:
+                    try:
+                        src = photo_data.get('src', '')
+                        base_url = self._extract_base_url(src)
+
+                        if base_url and base_url in urls_to_fetch and base_url not in captions:
+                            # Click on this photo to open detail view
+                            img_element = driver.execute_script(
+                                "return document.querySelector('img[src=\"' + arguments[0] + '\"]');",
+                                src
+                            )
+
+                            if img_element:
+                                img_element.click()
+                                time.sleep(2)
+
+                                # Extract caption from detail view
+                                caption = self._extract_caption_from_detail_view(driver)
+                                captions[base_url] = caption
+
+                                urls_found += 1
+                                found_new = True
+
+                                if caption:
+                                    logger.debug(f"Found caption for photo: {caption[:50]}...")
+
+                                if progress_callback:
+                                    try:
+                                        progress_callback(urls_found, urls_needed)
+                                    except Exception:
+                                        pass
+
+                                # Close detail view (press Escape)
+                                from selenium.webdriver.common.keys import Keys
+                                driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                                time.sleep(1)
+
+                    except Exception as e:
+                        logger.debug(f"Error extracting caption for photo: {e}")
+                        continue
+
+                if found_new:
+                    no_new_photos_count = 0
+                else:
+                    no_new_photos_count += 1
+
+                # Stop if we've scrolled a lot without finding new photos
+                if no_new_photos_count > 30:
+                    logger.debug("No new photos found after extended scrolling, stopping")
+                    break
+
+                # Scroll down to find more photos
+                scroll_position += scroll_increment
+                driver.execute_script(
+                    "arguments[0].scrollTop = arguments[1]",
+                    scroll_container,
+                    scroll_position
+                )
+                time.sleep(0.5)
+
+            logger.info(f"Fetched captions for {urls_found}/{urls_needed} photos")
+            return captions
+
+        except Exception as e:
+            logger.error(f"Error fetching captions: {e}")
+            return captions
+
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            gc.collect()
+
+    def _extract_caption_from_detail_view(self, driver: webdriver.Chrome) -> Optional[str]:
+        """
+        Extract caption from the photo detail view.
+
+        Args:
+            driver: WebDriver with photo detail view open.
+
+        Returns:
+            Caption string or None if not found.
+        """
+        try:
+            # Try to find the info button and click it
+            info_buttons = driver.find_elements(
+                By.CSS_SELECTOR,
+                "[aria-label*='Info'], [aria-label*='info'], [data-tooltip*='Info']"
+            )
+
+            if info_buttons:
+                info_buttons[0].click()
+                time.sleep(1)
+
+            # Look for description/caption in the info panel
+            # Google Photos uses various selectors for the description field
+            caption_selectors = [
+                # Description field in info panel
+                "[aria-label*='description']",
+                "[aria-label*='Description']",
+                "[data-type='description']",
+                # Text areas that might contain captions
+                "textarea[aria-label*='description']",
+                "div[aria-label*='description']",
+                # Common class patterns
+                "[class*='description']",
+                "[class*='caption']",
+            ]
+
+            for selector in caption_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in elements:
+                        text = elem.text or elem.get_attribute('value') or elem.get_attribute('aria-label')
+                        if text and len(text) > 2 and len(text) < 1000:
+                            # Filter out UI labels
+                            if text.lower() not in ['description', 'add a description', 'caption']:
+                                return text.strip()
+                except Exception:
+                    continue
+
+            # Also try searching the page for any visible text that looks like a caption
+            # (visible in the detail view, not in the grid)
+            try:
+                page_text = driver.find_element(By.TAG_NAME, 'body').text
+                lines = [l.strip() for l in page_text.split('\n') if l.strip()]
+                # Look for lines that seem like captions (not too short, not too long, not UI text)
+                skip_patterns = ['share', 'download', 'edit', 'delete', 'info', 'photo',
+                                 'video', 'zoom', 'add to', 'create', 'more', 'options']
+                for line in lines:
+                    if (10 < len(line) < 500 and
+                        not any(p in line.lower() for p in skip_patterns) and
+                        not line.startswith('http')):
+                        # This might be a caption
+                        return line
+            except Exception:
+                pass
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error extracting caption from detail view: {e}")
+            return None
 
 
 def scrape_albums(album_urls: List[str], headless: bool = True) -> List[MediaItem]:

@@ -30,9 +30,13 @@ class AlbumConfig:
 @dataclass
 class SyncConfig:
     """Sync settings."""
-    interval_minutes: int = 60
+    interval_minutes: int = 1440  # Default: 24 hours
     full_resolution: bool = True
     max_dimension: int = 1920
+    # Caption source precedence: "google_photos" or "embedded"
+    # "google_photos": Use Google Photos caption if available, fall back to embedded
+    # "embedded": Use embedded EXIF/IPTC caption if available, fall back to Google Photos
+    caption_precedence: str = "google_photos"
 
 
 @dataclass

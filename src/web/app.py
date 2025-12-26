@@ -181,7 +181,11 @@ def create_app(
         """Trigger album sync."""
         try:
             if app.on_sync_request:
-                app.on_sync_request()
+                # Get options from request body
+                data = request.get_json() or {}
+                update_all_captions = data.get('update_all_captions', False)
+
+                app.on_sync_request(update_all_captions=update_all_captions)
                 return jsonify({"success": True, "message": "Sync started"})
             else:
                 return jsonify({"error": "Sync not available"}), 503
