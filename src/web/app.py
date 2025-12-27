@@ -1,5 +1,6 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
-Web interface for PhotoLoop.
+PhotoLoop Dashboard.
 Provides configuration UI and REST API for control.
 """
 
@@ -19,6 +20,7 @@ def create_app(
     config: PhotoLoopConfig,
     cache_manager: Any = None,
     scheduler: Any = None,
+    display: Any = None,
     on_config_change: Optional[Callable] = None,
     on_sync_request: Optional[Callable] = None,
     on_control_request: Optional[Callable[[str], None]] = None
@@ -30,6 +32,7 @@ def create_app(
         config: PhotoLoop configuration.
         cache_manager: CacheManager instance (for status info).
         scheduler: Scheduler instance (for control).
+        display: Display instance (for photo control status).
         on_config_change: Callback when config is saved.
         on_sync_request: Callback to trigger sync.
         on_control_request: Callback for control commands (start/stop/resume).
@@ -47,6 +50,7 @@ def create_app(
     app.photoloop_config = config
     app.cache_manager = cache_manager
     app.scheduler = scheduler
+    app.display = display
     app.on_config_change = on_config_change
     app.on_sync_request = on_sync_request
     app.on_control_request = on_control_request
@@ -79,6 +83,15 @@ def create_app(
         # Add schedule info
         if app.scheduler:
             status["schedule"] = app.scheduler.get_status()
+
+        # Add schedule enabled from config
+        status["schedule_enabled"] = app.photoloop_config.schedule.enabled
+
+        # Add photo control status
+        if app.display:
+            status["photo_control"] = {
+                "paused": app.display.is_paused() if hasattr(app.display, 'is_paused') else False
+            }
 
         return jsonify(status)
 
@@ -127,11 +140,23 @@ def create_app(
 
     @app.route('/api/albums', methods=['GET'])
     def api_get_albums():
-        """Get configured albums."""
-        albums = [
-            {"url": a.url, "name": a.name}
-            for a in app.photoloop_config.albums
-        ]
+        """Get configured albums with photo counts."""
+        # Count photos per album
+        photo_counts = {}
+        if app.cache_manager:
+            for media in app.cache_manager.get_all_media():
+                src = media.album_source or ""
+                photo_counts[src] = photo_counts.get(src, 0) + 1
+
+        albums = []
+        for a in app.photoloop_config.albums:
+            album_name = a.name or a.url
+            albums.append({
+                "url": a.url,
+                "name": a.name,
+                "enabled": a.enabled,
+                "photo_count": photo_counts.get(album_name, 0)
+            })
         return jsonify(albums)
 
     @app.route('/api/albums', methods=['POST'])
@@ -176,6 +201,48 @@ def create_app(
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+    @app.route('/api/albums/<int:index>/enabled', methods=['POST'])
+    def api_set_album_enabled(index: int):
+        """Enable or disable an album for slideshow display."""
+        try:
+            data = request.get_json()
+            enabled = data.get('enabled', True)
+
+            if 0 <= index < len(app.photoloop_config.albums):
+                app.photoloop_config.albums[index].enabled = enabled
+                save_config(app.photoloop_config)
+
+                # Notify main app to rebuild playlist
+                if app.on_config_change:
+                    app.on_config_change()
+
+                return jsonify({"success": True, "enabled": enabled})
+            else:
+                return jsonify({"error": "Invalid album index"}), 400
+
+        except Exception as e:
+            logger.error(f"Error setting album enabled: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route('/api/albums/<int:index>/name', methods=['POST'])
+    def api_set_album_name(index: int):
+        """Update an album's display name."""
+        try:
+            data = request.get_json()
+            name = data.get('name', '').strip()
+
+            if 0 <= index < len(app.photoloop_config.albums):
+                app.photoloop_config.albums[index].name = name
+                save_config(app.photoloop_config)
+
+                return jsonify({"success": True, "name": name})
+            else:
+                return jsonify({"error": "Invalid album index"}), 400
+
+        except Exception as e:
+            logger.error(f"Error setting album name: {e}")
+            return jsonify({"error": str(e)}), 500
+
     @app.route('/api/sync', methods=['POST'])
     def api_sync():
         """Trigger album sync."""
@@ -184,8 +251,12 @@ def create_app(
                 # Get options from request body
                 data = request.get_json() or {}
                 update_all_captions = data.get('update_all_captions', False)
+                force_refetch_captions = data.get('force_refetch_captions', False)
 
-                app.on_sync_request(update_all_captions=update_all_captions)
+                app.on_sync_request(
+                    update_all_captions=update_all_captions,
+                    force_refetch_captions=force_refetch_captions
+                )
                 return jsonify({"success": True, "message": "Sync started"})
             else:
                 return jsonify({"error": "Sync not available"}), 503
@@ -206,16 +277,36 @@ def create_app(
                 "error_message": "Cache manager not available"
             })
 
+    @app.route('/api/extract-locations', methods=['POST'])
+    def api_extract_locations():
+        """Extract locations from GPS for photos without captions."""
+        if not app.cache_manager:
+            return jsonify({"error": "Cache manager not available"}), 503
+
+        try:
+            import threading
+
+            def do_extract():
+                updated = app.cache_manager.extract_locations()
+                logger.info(f"Location extraction completed: {updated} photos updated")
+
+            threading.Thread(target=do_extract, daemon=True).start()
+            return jsonify({"success": True, "message": "Location extraction started"})
+
+        except Exception as e:
+            logger.error(f"Location extraction error: {e}")
+            return jsonify({"error": str(e)}), 500
+
     @app.route('/api/control/<action>', methods=['POST'])
     def api_control(action: str):
         """Control the slideshow."""
-        valid_actions = ['start', 'stop', 'resume', 'next', 'reload']
+        valid_actions = ['start', 'stop', 'resume', 'next', 'prev', 'pause', 'toggle_pause', 'reload', 'start_temp']
 
         if action not in valid_actions:
             return jsonify({"error": f"Invalid action. Valid: {valid_actions}"}), 400
 
         try:
-            if app.on_control_request:
+            if app.on_control_request and action != 'start_temp':
                 app.on_control_request(action)
                 return jsonify({"success": True, "action": action})
             elif app.scheduler:
@@ -226,11 +317,56 @@ def create_app(
                     app.scheduler.force_off()
                 elif action == 'resume':
                     app.scheduler.clear_override()
+                elif action == 'start_temp':
+                    # Temporary override until next scheduled end time
+                    until = app.scheduler.force_on_temporarily()
+                    return jsonify({
+                        "success": True,
+                        "action": action,
+                        "until": until.isoformat() if until else None
+                    })
                 return jsonify({"success": True, "action": action})
             else:
                 return jsonify({"error": "Control not available"}), 503
 
         except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route('/api/schedule/enabled', methods=['POST'])
+    def api_schedule_enabled():
+        """Toggle schedule enabled state."""
+        try:
+            data = request.get_json()
+            if data is None or 'enabled' not in data:
+                return jsonify({"error": "Missing 'enabled' field"}), 400
+
+            enabled = bool(data['enabled'])
+
+            # Update config in memory
+            app.photoloop_config.schedule.enabled = enabled
+
+            # Save to config file
+            config_path = app.photoloop_config.config_path
+            if config_path:
+                import yaml
+                with open(config_path, 'r') as f:
+                    config_data = yaml.safe_load(f) or {}
+
+                if 'schedule' not in config_data:
+                    config_data['schedule'] = {}
+                config_data['schedule']['enabled'] = enabled
+
+                with open(config_path, 'w') as f:
+                    yaml.dump(config_data, f, default_flow_style=False)
+
+            # Notify of config change
+            if app.on_config_change:
+                app.on_config_change()
+
+            return jsonify({"success": True, "enabled": enabled})
+
+        except Exception as e:
+            logger.error(f"Error toggling schedule: {e}")
             return jsonify({"error": str(e)}), 500
 
     @app.route('/api/photos')

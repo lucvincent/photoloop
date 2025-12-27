@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Scheduler for PhotoLoop.
 Handles time-based scheduling with weekday/weekend support and manual overrides.
@@ -44,6 +45,7 @@ class Scheduler:
         """
         self.config = config
         self._override: Optional[ScheduleState] = None
+        self._temporary_override_until: Optional[datetime] = None
 
     def _parse_time(self, time_str: str) -> dt_time:
         """
@@ -119,6 +121,17 @@ class Scheduler:
         Returns:
             ScheduleState indicating what should be displayed.
         """
+        if now is None:
+            now = datetime.now()
+
+        # Check for temporary override expiration
+        if self._temporary_override_until is not None:
+            if now >= self._temporary_override_until:
+                # Temporary override has expired, clear it
+                logger.info("Temporary override expired, resuming normal schedule")
+                self._override = None
+                self._temporary_override_until = None
+
         # Check for manual override
         if self._override is not None:
             return self._override
@@ -126,9 +139,6 @@ class Scheduler:
         # If scheduling disabled, always active
         if not self.config.schedule.enabled:
             return ScheduleState.ACTIVE
-
-        if now is None:
-            now = datetime.now()
 
         # Get schedule for today
         day = now.weekday()
@@ -178,11 +188,66 @@ class Scheduler:
     def clear_override(self) -> None:
         """Clear manual override and resume normal schedule."""
         self._override = None
+        self._temporary_override_until = None
         logger.info("Schedule override cleared, resuming normal schedule")
+
+    def force_on_temporarily(self, now: Optional[datetime] = None) -> Optional[datetime]:
+        """
+        Force the slideshow on temporarily until the next scheduled end time.
+
+        This is useful for temporarily watching the slideshow during off-hours.
+        The override will automatically clear at the next scheduled end time.
+
+        Args:
+            now: Current datetime (defaults to now).
+
+        Returns:
+            The datetime when the override will expire, or None if scheduling disabled.
+        """
+        if now is None:
+            now = datetime.now()
+
+        if not self.config.schedule.enabled:
+            # If scheduling is disabled, just do a regular force on
+            self.force_on()
+            return None
+
+        # Calculate the next end time
+        from datetime import timedelta
+
+        day = now.weekday()
+        schedule = self._get_schedule_for_day(day)
+        end = self._parse_time(schedule.end_time)
+        current_time = now.time()
+
+        # Determine when the next end time is
+        if current_time < end:
+            # End time is later today
+            until = now.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+        else:
+            # End time is tomorrow
+            tomorrow = now + timedelta(days=1)
+            tomorrow_schedule = self._get_schedule_for_day(tomorrow.weekday())
+            tomorrow_end = self._parse_time(tomorrow_schedule.end_time)
+            until = tomorrow.replace(hour=tomorrow_end.hour, minute=tomorrow_end.minute, second=0, microsecond=0)
+
+        self._override = ScheduleState.FORCE_ON
+        self._temporary_override_until = until
+        logger.info(f"Temporary override: FORCE ON until {until.strftime('%Y-%m-%d %H:%M')}")
+
+        return until
 
     def has_override(self) -> bool:
         """Check if there's an active manual override."""
         return self._override is not None
+
+    def has_temporary_override(self) -> bool:
+        """Check if there's a temporary override that will auto-expire."""
+        return self._temporary_override_until is not None
+
+    def get_temporary_override_until(self) -> Optional[datetime]:
+        """Get the expiration time of the temporary override, if any."""
+        return self._temporary_override_until
 
     def get_next_transition(self, now: Optional[datetime] = None) -> Optional[Tuple[datetime, str]]:
         """
@@ -202,7 +267,11 @@ class Scheduler:
 
         state = self.get_current_state(now)
 
-        # If there's an override, no automatic transition
+        # If there's a temporary override, return when it expires
+        if self._temporary_override_until is not None:
+            return (self._temporary_override_until, "temporary override ends")
+
+        # If there's a permanent override, no automatic transition
         if state in (ScheduleState.FORCE_ON, ScheduleState.FORCE_OFF):
             return None
 
@@ -306,11 +375,14 @@ class Scheduler:
         next_transition = self.get_next_transition(now)
         today = self.get_today_schedule(now)
 
+        temp_until = self.get_temporary_override_until()
         return {
             "state": state.value,
             "should_show_slideshow": self.should_show_slideshow(now),
             "off_hours_mode": self.get_off_hours_mode(),
             "has_override": self.has_override(),
+            "has_temporary_override": self.has_temporary_override(),
+            "temporary_override_until": temp_until.isoformat() if temp_until else None,
             "next_transition": {
                 "time": next_transition[0].isoformat() if next_transition else None,
                 "description": next_transition[1] if next_transition else None

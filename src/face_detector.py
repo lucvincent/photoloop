@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Face detection for smart cropping.
 Uses OpenCV's YuNet DNN-based detector for accurate face detection.

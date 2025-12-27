@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Command-line interface for PhotoLoop.
 Provides commands to control and manage the photo frame.

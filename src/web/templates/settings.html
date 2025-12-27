@@ -1,9 +1,10 @@
+<!-- Copyright (c) 2025 Luc Vincent. All Rights Reserved. -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PhotoLoop</title>
+    <title>PhotoLoop Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
     <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
@@ -21,7 +22,7 @@
         <header>
             <div class="logo-title">
                 <img src="{{ url_for('static', filename='logo.svg') }}" alt="PhotoLoop">
-                <h1>PhotoLoop</h1>
+                <h1>PhotoLoop Dashboard</h1>
             </div>
             <div id="status-indicator" class="status">Loading...</div>
         </header>
@@ -36,19 +37,40 @@
 
         <!-- Control Tab -->
         <section id="control" class="tab-content active">
-            <h2>Slideshow Control</h2>
+            <h2>Photo Control</h2>
+            <div class="control-buttons" id="photo-control-buttons">
+                <button id="btn-prev" class="btn">Previous</button>
+                <button id="btn-pause" class="btn btn-primary">Pause</button>
+                <button id="btn-next" class="btn">Next</button>
+            </div>
+            <div id="photo-control-status" style="font-size: 0.85em; color: var(--text-muted); margin-top: 8px;">
+                Use these controls to navigate photos or pause the slideshow on a specific photo.
+            </div>
 
-            <div class="control-buttons">
-                <button id="btn-start" class="btn btn-success">Start Now</button>
-                <button id="btn-stop" class="btn btn-danger">Stop</button>
-                <button id="btn-resume" class="btn btn-primary">Resume Schedule</button>
-                <button id="btn-next" class="btn">Next Photo</button>
+            <h2 style="margin-top: 30px;">Slideshow Control</h2>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
+                <div class="control-buttons" style="margin: 0;">
+                    <button id="btn-start" class="btn btn-success">Start</button>
+                    <button id="btn-stop" class="btn btn-danger">Stop</button>
+                    <button id="btn-pause-schedule" class="btn btn-primary" style="display: none;">Pause Schedule</button>
+                </div>
+                <div class="form-group" style="margin: 0;">
+                    <label style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="schedule-enabled-control"
+                               {% if config.schedule.enabled %}checked{% endif %}>
+                        Schedule Enabled
+                    </label>
+                </div>
+            </div>
+            <div id="temp-override-info" style="display: none; font-size: 0.85em; color: var(--warning); margin-top: 12px;">
+                <strong>Temporary override active.</strong> Slideshow will resume normal schedule at <span id="temp-override-until">-</span>.
+                <button id="btn-resume-schedule" class="btn btn-small" style="margin-left: 10px;">Resume Schedule Now</button>
             </div>
 
             <div class="status-box">
                 <h3>Current Status</h3>
                 <div id="current-status">
-                    <p><strong>State:</strong> <span id="state">-</span></p>
+                    <p><strong>Display:</strong> <span id="state" class="status-badge">-</span></p>
                     <p><strong>Next Transition:</strong> <span id="next-transition">-</span></p>
                     <p><strong>Photos Cached:</strong> <span id="photo-count">-</span></p>
                     <p><strong>Cache Size:</strong> <span id="cache-size">-</span> MB</p>
@@ -93,6 +115,7 @@
             <button id="btn-add-album" class="btn btn-primary">Add Album</button>
 
             <h3>Configured Albums</h3>
+            <p class="hint">Changes in album selection take effect immediately.</p>
             <ul id="album-list" class="album-list">
                 <!-- Albums will be loaded here -->
             </ul>
@@ -251,7 +274,28 @@
                 const status = await apiCall('/api/status');
 
                 if (status.schedule) {
-                    document.getElementById('state').textContent = status.schedule.state;
+                    // Map scheduler state to user-friendly display
+                    const stateEl = document.getElementById('state');
+                    const state = status.schedule.state;
+                    let displayText, badgeClass;
+
+                    if (state === 'active' || state === 'force_on') {
+                        displayText = 'Running';
+                        badgeClass = 'status-badge running';
+                    } else if (state === 'off_hours') {
+                        displayText = 'Off-Hours';
+                        badgeClass = 'status-badge off-hours';
+                    } else if (state === 'force_off') {
+                        displayText = 'Stopped';
+                        badgeClass = 'status-badge stopped';
+                    } else {
+                        displayText = state;
+                        badgeClass = 'status-badge';
+                    }
+
+                    stateEl.textContent = displayText;
+                    stateEl.className = badgeClass;
+
                     if (status.schedule.next_transition.time) {
                         const nextTime = new Date(status.schedule.next_transition.time);
                         document.getElementById('next-transition').textContent =
@@ -269,6 +313,69 @@
                     document.getElementById('cache-size-detail').textContent = status.cache.size_mb;
                 }
 
+                // Update button states based on current state
+                if (status.schedule) {
+                    const state = status.schedule.state;
+                    const isRunning = (state === 'active' || state === 'force_on');
+                    const isStopped = (state === 'force_off');
+
+                    // Start button: "Start" when stopped, "Restart" when running
+                    const startBtn = document.getElementById('btn-start');
+                    startBtn.textContent = isRunning ? 'Restart' : 'Start';
+
+                    // Stop button: disabled when already stopped
+                    const stopBtn = document.getElementById('btn-stop');
+                    stopBtn.disabled = isStopped;
+                }
+
+                // Sync schedule enabled checkbox
+                if (status.schedule_enabled !== undefined) {
+                    document.getElementById('schedule-enabled-control').checked = status.schedule_enabled;
+                }
+
+                // Show/hide pause schedule button based on schedule enabled and state
+                const tempOverrideInfo = document.getElementById('temp-override-info');
+                const pauseScheduleBtn = document.getElementById('btn-pause-schedule');
+
+                if (status.schedule_enabled) {
+                    // Check for temporary override
+                    if (status.schedule && status.schedule.has_temporary_override) {
+                        tempOverrideInfo.style.display = 'block';
+                        pauseScheduleBtn.style.display = 'none';
+
+                        // Format the expiration time
+                        const until = new Date(status.schedule.temporary_override_until);
+                        document.getElementById('temp-override-until').textContent = until.toLocaleString();
+                    } else {
+                        tempOverrideInfo.style.display = 'none';
+                        // Only show Pause Schedule button during off-hours
+                        const state = status.schedule.state;
+                        if (state === 'off_hours') {
+                            pauseScheduleBtn.style.display = 'inline-block';
+                        } else {
+                            pauseScheduleBtn.style.display = 'none';
+                        }
+                    }
+                } else {
+                    pauseScheduleBtn.style.display = 'none';
+                    tempOverrideInfo.style.display = 'none';
+                }
+
+                // Update photo control pause button
+                if (status.photo_control) {
+                    const pauseBtn = document.getElementById('btn-pause');
+                    const statusDiv = document.getElementById('photo-control-status');
+                    if (status.photo_control.paused) {
+                        pauseBtn.textContent = 'Resume';
+                        pauseBtn.className = 'btn btn-success';
+                        statusDiv.innerHTML = '<strong style="color: var(--warning);">Slideshow paused.</strong> Click Resume to continue auto-advance.';
+                    } else {
+                        pauseBtn.textContent = 'Pause';
+                        pauseBtn.className = 'btn btn-primary';
+                        statusDiv.textContent = 'Use these controls to navigate photos or pause the slideshow on a specific photo.';
+                    }
+                }
+
                 document.getElementById('status-indicator').textContent = 'Connected';
                 document.getElementById('status-indicator').className = 'status online';
             } catch (e) {
@@ -284,12 +391,82 @@
             list.innerHTML = '';
             albums.forEach((album, index) => {
                 const li = document.createElement('li');
+                li.dataset.index = index;
+                const displayName = album.name || 'Unnamed album';
                 li.innerHTML = `
-                    <span class="album-name">${album.name || 'Unnamed'}</span>
-                    <span class="album-url">${album.url}</span>
+                    <label class="album-enabled-label">
+                        <input type="checkbox" class="album-enabled-checkbox"
+                               data-index="${index}" ${album.enabled ? 'checked' : ''}>
+                        <span>Show</span>
+                    </label>
+                    <div class="album-details">
+                        <div class="album-name-row">
+                            <span class="album-name-wrapper">
+                                <span class="album-name editable" data-index="${index}">${displayName}</span>
+                                <span class="album-photo-count">(${album.photo_count} photos)</span>
+                            </span>
+                            <span class="album-edit-wrapper hidden">
+                                <input type="text" class="album-name-input" data-index="${index}"
+                                       value="${album.name || ''}" placeholder="Album name">
+                                <button class="btn btn-small btn-save" data-index="${index}">Save</button>
+                            </span>
+                        </div>
+                        <div class="album-url">${album.url}</div>
+                    </div>
                     <button class="btn btn-small btn-danger" onclick="deleteAlbum(${index})">Delete</button>
                 `;
                 list.appendChild(li);
+            });
+
+            // Add event handlers for enabled checkboxes
+            document.querySelectorAll('.album-enabled-checkbox').forEach(checkbox => {
+                checkbox.addEventListener('change', async (e) => {
+                    const index = e.target.dataset.index;
+                    const enabled = e.target.checked;
+                    await apiCall(`/api/albums/${index}/enabled`, 'POST', { enabled });
+                });
+            });
+
+            // Click on album name to edit
+            document.querySelectorAll('.album-name.editable').forEach(nameSpan => {
+                nameSpan.addEventListener('click', (e) => {
+                    const li = e.target.closest('li');
+                    li.querySelector('.album-name-wrapper').classList.add('hidden');
+                    li.querySelector('.album-edit-wrapper').classList.remove('hidden');
+                    const input = li.querySelector('.album-name-input');
+                    input.focus();
+                    input.select();
+                });
+            });
+
+            // Save button handler
+            document.querySelectorAll('.btn-save').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const li = e.target.closest('li');
+                    const input = li.querySelector('.album-name-input');
+                    const index = input.dataset.index;
+                    const name = input.value.trim();
+                    await apiCall(`/api/albums/${index}/name`, 'POST', { name });
+                    // Update display and switch back to view mode
+                    li.querySelector('.album-name').textContent = name || 'Unnamed album';
+                    li.querySelector('.album-name-wrapper').classList.remove('hidden');
+                    li.querySelector('.album-edit-wrapper').classList.add('hidden');
+                });
+            });
+
+            // Keyboard handlers for input
+            document.querySelectorAll('.album-name-input').forEach(input => {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        const li = e.target.closest('li');
+                        li.querySelector('.btn-save').click();
+                    } else if (e.key === 'Escape') {
+                        // Cancel edit
+                        const li = e.target.closest('li');
+                        li.querySelector('.album-name-wrapper').classList.remove('hidden');
+                        li.querySelector('.album-edit-wrapper').classList.add('hidden');
+                    }
+                });
             });
         }
 
@@ -324,12 +501,37 @@
             apiCall('/api/control/stop', 'POST');
             setTimeout(loadStatus, 500);
         });
-        document.getElementById('btn-resume').addEventListener('click', () => {
-            apiCall('/api/control/resume', 'POST');
-            setTimeout(loadStatus, 500);
-        });
         document.getElementById('btn-next').addEventListener('click', () => {
             apiCall('/api/control/next', 'POST');
+        });
+
+        // Photo control buttons
+        document.getElementById('btn-prev').addEventListener('click', () => {
+            apiCall('/api/control/prev', 'POST');
+        });
+
+        document.getElementById('btn-pause').addEventListener('click', () => {
+            apiCall('/api/control/toggle_pause', 'POST');
+            setTimeout(loadStatus, 300);
+        });
+
+        // Schedule enabled checkbox - immediate save
+        document.getElementById('schedule-enabled-control').addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+            await apiCall('/api/schedule/enabled', 'POST', { enabled });
+            setTimeout(loadStatus, 500);
+        });
+
+        // Pause Schedule button - temporary override
+        document.getElementById('btn-pause-schedule').addEventListener('click', async () => {
+            await apiCall('/api/control/start_temp', 'POST');
+            setTimeout(loadStatus, 500);
+        });
+
+        // Resume Schedule button - clear temporary override
+        document.getElementById('btn-resume-schedule').addEventListener('click', async () => {
+            await apiCall('/api/control/resume', 'POST');
+            setTimeout(loadStatus, 500);
         });
 
         // Sync progress polling

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 #
 # PhotoLoop Installation Script
 # Installs PhotoLoop on Raspberry Pi

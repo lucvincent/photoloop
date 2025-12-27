@@ -1,18 +1,30 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Metadata extraction for photos.
 Extracts EXIF data, IPTC captions, and formats dates.
+Includes reverse geocoding for GPS coordinates.
 """
 
+import json
 import logging
 import os
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Tuple
 
 from PIL import Image
 from PIL.ExifTags import TAGS, GPSTAGS
 
 logger = logging.getLogger(__name__)
+
+# Geocoding cache to avoid repeated API calls
+_geocode_cache: dict = {}
+_geocode_cache_lock = threading.Lock()
+_geocode_cache_path: Optional[Path] = None
+_last_geocode_time: float = 0
 
 
 @dataclass
@@ -27,6 +39,7 @@ class PhotoMetadata:
     orientation: Optional[int] = None
     gps_latitude: Optional[float] = None
     gps_longitude: Optional[float] = None
+    location: Optional[str] = None  # Human-readable location from reverse geocoding
 
 
 class MetadataExtractor:
@@ -348,3 +361,162 @@ def get_photo_caption(
     extractor = MetadataExtractor()
     metadata = extractor.extract(image_path)
     return metadata.caption
+
+
+def init_geocode_cache(cache_dir: str) -> None:
+    """
+    Initialize the geocoding cache from disk.
+
+    Args:
+        cache_dir: Directory where cache file is stored.
+    """
+    global _geocode_cache, _geocode_cache_path
+
+    _geocode_cache_path = Path(cache_dir) / "geocode_cache.json"
+
+    with _geocode_cache_lock:
+        if _geocode_cache_path.exists():
+            try:
+                with open(_geocode_cache_path, 'r') as f:
+                    _geocode_cache = json.load(f)
+                logger.info(f"Loaded {len(_geocode_cache)} cached geocode results")
+            except Exception as e:
+                logger.warning(f"Failed to load geocode cache: {e}")
+                _geocode_cache = {}
+        else:
+            _geocode_cache = {}
+
+
+def _save_geocode_cache() -> None:
+    """Save geocoding cache to disk."""
+    global _geocode_cache, _geocode_cache_path
+
+    if _geocode_cache_path is None:
+        return
+
+    with _geocode_cache_lock:
+        try:
+            with open(_geocode_cache_path, 'w') as f:
+                json.dump(_geocode_cache, f)
+        except Exception as e:
+            logger.warning(f"Failed to save geocode cache: {e}")
+
+
+def reverse_geocode(latitude: float, longitude: float) -> Optional[str]:
+    """
+    Convert GPS coordinates to a human-readable location name.
+
+    Uses OpenStreetMap's Nominatim service with rate limiting and caching.
+
+    Args:
+        latitude: GPS latitude in decimal degrees.
+        longitude: GPS longitude in decimal degrees.
+
+    Returns:
+        Location string like "Boulder, CO" or "Paris, France", or None on error.
+    """
+    global _geocode_cache, _last_geocode_time
+
+    # Round coordinates to ~100m precision for cache efficiency
+    # 3 decimal places ≈ 111m precision
+    cache_key = f"{latitude:.3f},{longitude:.3f}"
+
+    # Check cache first
+    with _geocode_cache_lock:
+        if cache_key in _geocode_cache:
+            return _geocode_cache[cache_key]
+
+    # Rate limit: Nominatim requires max 1 request per second
+    with _geocode_cache_lock:
+        elapsed = time.time() - _last_geocode_time
+        if elapsed < 1.0:
+            time.sleep(1.0 - elapsed)
+        _last_geocode_time = time.time()
+
+    try:
+        from geopy.geocoders import Nominatim
+        from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+
+        geolocator = Nominatim(
+            user_agent="photoloop/1.0 (raspberry pi photo frame)",
+            timeout=10
+        )
+
+        location = geolocator.reverse(
+            (latitude, longitude),
+            exactly_one=True,
+            language="en"
+        )
+
+        if location and location.raw:
+            address = location.raw.get("address", {})
+
+            # Extract relevant components
+            city = (
+                address.get("city") or
+                address.get("town") or
+                address.get("village") or
+                address.get("municipality") or
+                address.get("county")
+            )
+
+            state = address.get("state")
+            country = address.get("country")
+            country_code = address.get("country_code", "").upper()
+
+            # Format based on country
+            if country_code == "US" and city and state:
+                # US: "Boulder, CO" - use state abbreviation
+                state_abbrev = _get_us_state_abbrev(state)
+                result = f"{city}, {state_abbrev}"
+            elif city and country:
+                # International: "Paris, France"
+                result = f"{city}, {country}"
+            elif city:
+                result = city
+            elif country:
+                result = country
+            else:
+                result = None
+
+            # Cache the result
+            with _geocode_cache_lock:
+                _geocode_cache[cache_key] = result
+                # Save cache periodically (every 10 new entries)
+                if len(_geocode_cache) % 10 == 0:
+                    _save_geocode_cache()
+
+            return result
+
+    except ImportError:
+        logger.warning("geopy not installed, cannot reverse geocode")
+    except (GeocoderTimedOut, GeocoderServiceError) as e:
+        logger.debug(f"Geocoding service error: {e}")
+    except Exception as e:
+        logger.debug(f"Reverse geocoding failed: {e}")
+
+    # Cache failures too to avoid repeated API calls
+    with _geocode_cache_lock:
+        _geocode_cache[cache_key] = None
+
+    return None
+
+
+def _get_us_state_abbrev(state_name: str) -> str:
+    """Convert US state name to abbreviation."""
+    states = {
+        "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+        "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+        "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
+        "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+        "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+        "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+        "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+        "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+        "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+        "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
+        "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
+        "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+        "Wisconsin": "WI", "Wyoming": "WY", "District of Columbia": "DC"
+    }
+    return states.get(state_name, state_name)

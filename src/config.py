@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Configuration management for PhotoLoop.
 Handles loading, validation, and defaults for all settings.
@@ -25,12 +26,14 @@ class AlbumConfig:
     """Configuration for a single album."""
     url: str
     name: str = ""
+    enabled: bool = True  # Whether to include this album in the slideshow
 
 
 @dataclass
 class SyncConfig:
     """Sync settings."""
     interval_minutes: int = 1440  # Default: 24 hours
+    sync_on_start: bool = False  # Whether to sync immediately on service start
     full_resolution: bool = True
     max_dimension: int = 1920
     # Caption source precedence: "google_photos" or "embedded"
@@ -86,6 +89,17 @@ class OverlayConfig:
     background_color: List[int] = field(default_factory=lambda: [0, 0, 0, 128])
     padding: int = 20
     max_caption_length: int = 200
+    # Caption source priorities (lower number = higher priority)
+    # Available sources: google_description, embedded, google_location
+    caption_sources: Dict[str, int] = field(default_factory=lambda: {
+        "google_description": 1,
+        "embedded": 2,
+        "google_location": 3
+    })
+    # How many caption sources to show (1 = just highest priority with data)
+    max_caption_sources: int = 1
+    # Separator between multiple caption sources
+    caption_separator: str = " — "
 
 
 @dataclass
@@ -210,7 +224,8 @@ def load_config(config_path: Optional[str] = None) -> PhotoLoopConfig:
         elif isinstance(album_data, dict):
             albums.append(AlbumConfig(
                 url=album_data.get('url', ''),
-                name=album_data.get('name', '')
+                name=album_data.get('name', ''),
+                enabled=album_data.get('enabled', True)
             ))
 
     # Build config object

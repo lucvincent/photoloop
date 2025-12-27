@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 PhotoLoop - Main Application.
 Orchestrates all components: display, caching, scheduling, and web interface.
@@ -162,6 +163,7 @@ class PhotoLoop:
                 self.config,
                 cache_manager=self.cache_manager,
                 scheduler=self.scheduler,
+                display=self.display,
                 on_config_change=self._on_config_change,
                 on_sync_request=self._on_sync_request,
                 on_control_request=self._on_control_request
@@ -187,6 +189,19 @@ class PhotoLoop:
         self.web_thread = threading.Thread(target=run_web, daemon=True)
         self.web_thread.start()
 
+    def _format_interval(self, minutes: int) -> str:
+        """Format minutes as human-readable string."""
+        days, remainder = divmod(minutes, 1440)
+        hours, mins = divmod(remainder, 60)
+        parts = []
+        if days > 0:
+            parts.append(f"{days} day{'s' if days != 1 else ''}")
+        if hours > 0:
+            parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        if mins > 0 or not parts:
+            parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
+        return ", ".join(parts)
+
     def _start_sync_thread(self) -> None:
         """Start the background sync thread."""
         if self.config.sync.interval_minutes <= 0:
@@ -195,9 +210,17 @@ class PhotoLoop:
 
         def sync_loop():
             interval = self.config.sync.interval_minutes * 60
+            interval_str = self._format_interval(self.config.sync.interval_minutes)
 
-            # Initial sync after a short delay
-            time.sleep(30)
+            # If sync_on_start is enabled, sync after a short delay
+            # Otherwise, wait for the full interval before first sync
+            if self.config.sync.sync_on_start:
+                logger.info("Sync on start enabled, will sync in 30 seconds...")
+                time.sleep(30)
+            else:
+                logger.info(f"Waiting {interval_str} until first scheduled sync")
+                if self._shutdown_event.wait(interval):
+                    return  # Shutdown requested
 
             while not self._shutdown_event.is_set():
                 try:
@@ -208,11 +231,13 @@ class PhotoLoop:
                     logger.error(f"Sync error: {e}")
 
                 # Wait for next sync or shutdown
-                self._shutdown_event.wait(interval)
+                if self._shutdown_event.wait(interval):
+                    break
 
         self.sync_thread = threading.Thread(target=sync_loop, daemon=True)
         self.sync_thread.start()
-        logger.info(f"Sync thread started (interval: {self.config.sync.interval_minutes} minutes)")
+        interval_str = self._format_interval(self.config.sync.interval_minutes)
+        logger.info(f"Sync thread started (interval: {interval_str})")
 
     def _on_config_change(self) -> None:
         """Handle configuration changes from web interface."""
@@ -225,18 +250,30 @@ class PhotoLoop:
                 self.display.config = self.config
             if self.cache_manager:
                 self.cache_manager.config = self.config
+                # Rebuild playlist to reflect album enable/disable changes
+                self.cache_manager.rebuild_playlist()
+                logger.info("Playlist rebuilt after config change")
         except Exception as e:
             logger.error(f"Error reloading config: {e}")
 
-    def _on_sync_request(self, update_all_captions: bool = False) -> None:
+    def _on_sync_request(
+        self,
+        update_all_captions: bool = False,
+        force_refetch_captions: bool = False
+    ) -> None:
         """Handle sync request from web interface."""
         def do_sync():
             try:
-                if update_all_captions:
-                    logger.info("Manual sync requested (with caption update for all photos)...")
+                if force_refetch_captions:
+                    logger.info("Manual sync requested (force re-fetch ALL Google metadata)...")
+                elif update_all_captions:
+                    logger.info("Manual sync requested (fetch missing Google metadata)...")
                 else:
                     logger.info("Manual sync requested...")
-                self.cache_manager.sync(update_all_captions=update_all_captions)
+                self.cache_manager.sync(
+                    update_all_captions=update_all_captions,
+                    force_refetch_captions=force_refetch_captions
+                )
                 logger.info("Manual sync completed")
             except Exception as e:
                 logger.error(f"Manual sync error: {e}")
@@ -259,6 +296,15 @@ class PhotoLoop:
         elif action == 'next':
             if self.display:
                 self.display.skip_to_next()
+        elif action == 'prev':
+            if self.display:
+                self.display.skip_to_previous()
+        elif action == 'pause':
+            if self.display:
+                self.display.pause()
+        elif action == 'toggle_pause':
+            if self.display:
+                self.display.toggle_pause()
         elif action == 'reload':
             self._on_config_change()
 
@@ -337,17 +383,26 @@ class PhotoLoop:
                     last_state = current_state
 
                 # Update display mode
-                if should_show:
+                # Check if any albums are enabled for display
+                has_albums = self.cache_manager.has_enabled_albums()
+
+                if should_show and has_albums:
                     self.display.set_mode(DisplayMode.SLIDESHOW)
 
                     # Check if we need to load a new photo
                     # Only load new photo if duration complete AND no transition in progress
+                    # Also check for previous request
+                    go_previous = self.display.is_previous_requested()
                     if (current_media is None or
+                        go_previous or
                         (self.display.is_photo_duration_complete() and
                          self.display.is_transition_complete())):
 
-                        # Get next media from cache
-                        next_media = self.cache_manager.get_next_media()
+                        # Get next or previous media from cache
+                        if go_previous:
+                            next_media = self.cache_manager.get_previous_media()
+                        else:
+                            next_media = self.cache_manager.get_next_media()
                         if next_media:
                             # Compute display parameters
                             params = self.cache_manager.get_display_params(
@@ -365,6 +420,10 @@ class PhotoLoop:
                             logger.info(f"Displaying photo: {os.path.basename(next_media.local_path)}")
                         elif current_media is None:
                             logger.warning("No media available to display")
+                elif not has_albums:
+                    # No albums enabled - stop slideshow (show black screen)
+                    current_media = None
+                    self.display.set_mode(DisplayMode.BLACK)
                 else:
                     # Off-hours mode
                     current_media = None  # Reset so we load fresh when resuming

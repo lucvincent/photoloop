@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Video playback for PhotoLoop.
 Uses ffpyplayer for video decoding and pygame for display.

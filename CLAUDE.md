@@ -1,3 +1,4 @@
+<!-- Copyright (c) 2025 Luc Vincent. All Rights Reserved. -->
 # PhotoLoop
 
 Digital photo frame application for Raspberry Pi that displays photos from public Google Photos albums.

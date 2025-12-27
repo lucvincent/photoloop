@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Google Photos album scraper.
 Extracts photo and video URLs from public Google Photos albums.
@@ -34,6 +35,7 @@ class MediaItem:
     media_type: str             # "photo" or "video"
     caption: Optional[str]      # Caption/description if found
     thumbnail_url: Optional[str] = None  # Thumbnail URL
+    album_name: Optional[str] = None     # Album this item came from
 
 
 class AlbumScraper:
@@ -736,21 +738,28 @@ class AlbumScraper:
                         container.click()
                         time.sleep(2)
 
-                        # Extract caption
-                        caption = self._extract_caption_from_detail_view(driver)
+                        # Extract caption and location
+                        info = self._extract_info_from_detail_view(driver)
+                        caption = info.get('caption')
+                        location = info.get('location')
                         captions[base_url] = caption
                         total_found += 1
 
                         # Log progress every photo for debugging
                         if total_found <= 10 or total_found % 50 == 0:
-                            logger.info(f"Processed photo {total_found}: caption={'yes' if caption else 'no'}")
+                            logger.info(f"Processed photo {total_found}: caption={'yes' if caption else 'no'}, location={'yes' if location else 'no'}")
 
                         if caption:
                             logger.info(f"Caption found: {caption[:60]}...")
+                        if location:
+                            logger.info(f"Location found: {location}")
 
-                        # Call callback to save caption immediately
+                        # Call callback to save caption and location immediately
                         if caption_found_callback:
                             try:
+                                caption_found_callback(base_url, caption, location)
+                            except TypeError:
+                                # Backwards compatibility: old callback signature without location
                                 caption_found_callback(base_url, caption)
                             except Exception as e:
                                 logger.warning(f"Error in caption callback: {e}")
@@ -822,10 +831,30 @@ class AlbumScraper:
         Returns:
             Caption string or None if not found.
         """
+        result = self._extract_info_from_detail_view(driver)
+        return result.get('caption') if result else None
+
+    def _extract_info_from_detail_view(self, driver: webdriver.Chrome) -> dict:
+        """
+        Extract caption and location from the photo detail view.
+
+        Uses targeted DOM selectors based on Google Photos' structure:
+        - Location: div.R9U8ab inside [aria-label="Edit location"]
+        - Description: div.oBMhZb (filtered to exclude metadata)
+
+        Args:
+            driver: WebDriver with photo detail view open.
+
+        Returns:
+            Dict with 'caption' and 'location' keys (values may be None).
+        """
+        import re
+        result = {'caption': None, 'location': None}
+
         try:
             from selenium.webdriver.common.action_chains import ActionChains
 
-            # Try to find and click the info button
+            # Try to find and click the info button to open the info panel
             info_buttons = driver.find_elements(
                 By.CSS_SELECTOR,
                 "[aria-label*='Info'], [aria-label*='info'], [aria-label='Open info'], "
@@ -833,91 +862,91 @@ class AlbumScraper:
             )
 
             if info_buttons:
-                info_buttons[0].click()
+                # Use JavaScript click to avoid "element not interactable" errors
+                driver.execute_script("arguments[0].click();", info_buttons[0])
                 time.sleep(1.5)  # Allow time for info panel to load
             else:
                 # Try pressing 'i' key to open info panel
                 ActionChains(driver).send_keys('i').perform()
                 time.sleep(1.5)  # Allow time for info panel to load
 
-            # Get the page text and look for caption
-            # The caption appears after "Info" and before "Details" in Google Photos
-            page_text = driver.find_element(By.TAG_NAME, 'body').text
-            lines = [l.strip() for l in page_text.split('\n') if l.strip()]
-
-            # Skip patterns for UI elements and metadata
-            skip_patterns = [
-                'share', 'download', 'edit', 'delete', 'photo', 'video',
-                'zoom', 'add to', 'create', 'more', 'options', 'back',
-                'open info', 'say something', 'details', 'used in',
-                'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
-                'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun',
-                'gmt', 'pst', 'pdt', 'est', 'edt', 'cst', 'cdt', 'mst', 'mdt',
-                'google pixel', 'iphone', 'samsung', 'canon', 'nikon', 'sony',
-                'ƒ/', 'mm', 'iso',  # Camera metadata
-                'shared by', 'ilce',  # Sharing info, Sony camera model
-            ]
-
-            # Also skip lines that look like dates, times, or filenames
-            import re
-            date_pattern = re.compile(r'^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{1,2}[/\-]\d{1,2}|\d{4})', re.I)
-            time_pattern = re.compile(r'^\d{1,2}:\d{2}')
-            # Filename patterns: ends with image extension or starts with camera prefixes
-            filename_pattern = re.compile(
-                r'\.(jpg|jpeg|png|heic|heif|gif|webp|raw|cr2|nef|arw|dng)$|'
-                r'^(DSC|IMG|PXL|DCIM|P\d{7}|_DSC|_MG_|DSCN|SAM_|GOPR|DJI_)',
-                re.I
+            # Extract location using targeted selector
+            # Location is inside an element with aria-label="Edit location"
+            loc_containers = driver.find_elements(
+                By.CSS_SELECTOR,
+                "[aria-label='Edit location'] div.R9U8ab"
             )
-            # Dimension patterns: "4898 × 3265", "16MP", etc.
-            dimension_pattern = re.compile(r'^\d+\s*[×x]\s*\d+$|^\d+(\.\d+)?\s*MP$', re.I)
+            for elem in loc_containers:
+                text = elem.text
+                if text and text.strip():
+                    location = text.strip()
+                    # Skip placeholder text that indicates no real location
+                    if location.lower() in ['unknown location', 'add location']:
+                        continue
+                    result['location'] = location
+                    logger.debug(f"Found location via DOM: {result['location']}")
+                    break
 
-            for line in lines:
-                line_lower = line.lower()
+            # Extract description using targeted selector
+            # Google Photos uses div.oBMhZb for info panel content
+            # We need to filter out metadata (time, camera settings, dimensions)
+            desc_elements = driver.find_elements(By.CSS_SELECTOR, 'div.oBMhZb')
 
-                # Skip short lines
-                if len(line) < 5:
+            # Patterns that indicate metadata, not a description
+            # These patterns match against each line of the text
+            metadata_patterns = [
+                r'^\d{1,2}:\d{2}',  # Time like "8:13 AM"
+                r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)',  # Day of week
+                r'^GMT[+-]',  # Timezone
+                r'^ƒ/',  # Aperture
+                r'^\d+(\.\d+)?mm$',  # Focal length
+                r'^ISO\d+',  # ISO
+                r'^\d+/\d+$',  # Shutter speed
+                r'^\d+(\.\d+)?\s*MP$',  # Megapixels
+                r'^\d+\s*[×x]\s*\d+$',  # Dimensions
+                r'^Ultra HDR',  # HDR mode
+            ]
+            metadata_re = re.compile('|'.join(metadata_patterns), re.IGNORECASE)
+
+            def is_metadata(text: str) -> bool:
+                """Check if text looks like metadata by checking each line."""
+                lines = text.strip().split('\n')
+                # If any line matches metadata, consider the whole thing metadata
+                for line in lines:
+                    line = line.strip()
+                    if line and metadata_re.match(line):
+                        return True
+                return False
+
+            for elem in desc_elements:
+                text = elem.text
+                if not text or not text.strip():
                     continue
 
-                # Skip very long lines (likely not captions)
-                if len(line) > 500:
+                text = text.strip()
+
+                # Skip if it matches metadata patterns
+                if is_metadata(text):
                     continue
 
-                # Skip UI elements
-                if any(p in line_lower for p in skip_patterns):
+                # Skip if it's the same as location (sometimes appears twice)
+                if result['location'] and text == result['location']:
                     continue
 
-                # Skip lines that look like dates or times
-                if date_pattern.match(line) or time_pattern.match(line):
+                # Skip very short text (likely labels)
+                if len(text) < 5:
                     continue
 
-                # Skip lines that look like filenames
-                if filename_pattern.search(line):
-                    continue
+                # This looks like a real description
+                result['caption'] = text
+                logger.debug(f"Found caption via DOM: {result['caption'][:50]}...")
+                break
 
-                # Skip image dimensions like "4898 × 3265" or "16MP"
-                if dimension_pattern.match(line):
-                    continue
-
-                # Skip the word "Info" by itself
-                if line_lower == 'info':
-                    continue
-
-                # Skip lines that are just numbers
-                if line.replace(',', '').replace('.', '').isdigit():
-                    continue
-
-                # This looks like a caption!
-                return line
-
-            # Debug: log first few candidate lines when no caption found
-            candidates = [l for l in lines if 5 <= len(l) <= 500][:5]
-            if candidates:
-                logger.info(f"Caption extraction - sample lines: {candidates[:3]}")
-            return None
+            return result
 
         except Exception as e:
-            logger.debug(f"Error extracting caption from detail view: {e}")
-            return None
+            logger.debug(f"Error extracting info from detail view: {e}")
+            return result
 
 
 def scrape_albums(album_urls: List[str], headless: bool = True) -> List[MediaItem]:

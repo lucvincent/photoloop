@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Cache manager for PhotoLoop.
 Handles downloading, storing, and managing photos/videos from Google Photos.
@@ -23,7 +24,7 @@ from .album_scraper import AlbumScraper, MediaItem
 from .config import PhotoLoopConfig
 from .face_detector import FaceDetector, FaceRegion, faces_from_dict, faces_to_dict
 from .image_processor import DisplayParams, ImageProcessor
-from .metadata import MetadataExtractor
+from .metadata import MetadataExtractor, init_geocode_cache, reverse_geocode
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class CachedMedia:
     url: str                         # Original Google Photos URL
     local_path: str                  # Path to cached file
     media_type: str                  # "photo" or "video"
-    caption: Optional[str] = None    # From Google Photos
+    caption: Optional[str] = None    # From Google Photos or embedded EXIF/IPTC
     exif_date: Optional[str] = None  # ISO format date string
     album_source: str = ""           # Which album it came from
     download_date: str = ""          # When first downloaded
@@ -75,6 +76,9 @@ class CachedMedia:
     cached_faces: Optional[List[Dict[str, Any]]] = None  # Detected faces (separate from display_params)
     display_params: Optional[Dict[str, Any]] = None  # Cached display parameters
     deleted: bool = False            # Marked for deletion
+    location: Optional[str] = None   # Reverse-geocoded location from EXIF GPS
+    google_location: Optional[str] = None  # Location scraped from Google Photos info panel
+    google_metadata_fetched: bool = False  # True once Google DOM metadata has been fetched (even if empty)
 
     def to_dict(self) -> dict:
         return {
@@ -90,7 +94,10 @@ class CachedMedia:
             "content_hash": self.content_hash,
             "cached_faces": self.cached_faces,
             "display_params": self.display_params,
-            "deleted": self.deleted
+            "deleted": self.deleted,
+            "location": self.location,
+            "google_location": self.google_location,
+            "google_metadata_fetched": self.google_metadata_fetched
         }
 
     @classmethod
@@ -108,7 +115,10 @@ class CachedMedia:
             content_hash=data.get("content_hash", ""),
             cached_faces=data.get("cached_faces"),
             display_params=data.get("display_params"),
-            deleted=data.get("deleted", False)
+            deleted=data.get("deleted", False),
+            location=data.get("location"),
+            google_location=data.get("google_location"),
+            google_metadata_fetched=data.get("google_metadata_fetched", False)
         )
 
 
@@ -160,6 +170,9 @@ class CacheManager:
 
         # Ensure cache directory exists
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize geocoding cache
+        init_geocode_cache(str(self.cache_dir))
 
         # Load existing metadata
         self._load_metadata()
@@ -382,13 +395,20 @@ class CacheManager:
                 local_path.unlink()
             return None
 
-    def sync(self, force_full: bool = False, update_all_captions: bool = False) -> Dict[str, int]:
+    def sync(
+        self,
+        force_full: bool = False,
+        update_all_captions: bool = False,
+        force_refetch_captions: bool = False
+    ) -> Dict[str, int]:
         """
         Sync cache with Google Photos albums.
 
         Args:
             force_full: Force re-download of all items.
-            update_all_captions: If True, fetch captions for all photos (not just new ones).
+            update_all_captions: If True, fetch captions for photos missing metadata.
+            force_refetch_captions: If True, re-fetch captions for ALL photos
+                (even those with existing data). Use after changing extraction logic.
 
         Returns:
             Statistics dict with counts of new/updated/deleted items.
@@ -401,11 +421,16 @@ class CacheManager:
             return stats
 
         try:
-            return self._do_sync(force_full, update_all_captions)
+            return self._do_sync(force_full, update_all_captions, force_refetch_captions)
         finally:
             self._sync_lock.release()
 
-    def _do_sync(self, force_full: bool = False, update_all_captions: bool = False) -> Dict[str, int]:
+    def _do_sync(
+        self,
+        force_full: bool = False,
+        update_all_captions: bool = False,
+        force_refetch_captions: bool = False
+    ) -> Dict[str, int]:
         """Internal sync implementation."""
         stats = {"new": 0, "updated": 0, "deleted": 0, "unchanged": 0, "errors": 0, "captions_updated": 0}
 
@@ -438,7 +463,7 @@ class CacheManager:
 
                 items = self._scraper.scrape_album(album.url)
                 for item in items:
-                    item.caption = item.caption  # Keep original caption
+                    item.album_name = album_name  # Track which album this came from
                 all_items.extend(items)
                 albums_scraped_successfully += 1
                 self._sync_progress.albums_done = albums_scraped_successfully
@@ -475,9 +500,11 @@ class CacheManager:
                 existing = self._media.get(media_id)
 
                 if existing and not force_full:
-                    # Update last_seen
+                    # Update last_seen and album_source
                     existing.last_seen = now
                     existing.deleted = False
+                    if item.album_name:
+                        existing.album_source = item.album_name
 
                     # Check if caption changed
                     if item.caption and item.caption != existing.caption:
@@ -493,6 +520,7 @@ class CacheManager:
                         # Extract metadata
                         exif_date = None
                         embedded_caption = None
+                        location = None
                         if item.media_type == "photo":
                             try:
                                 metadata = self._metadata_extractor.extract(local_path)
@@ -500,6 +528,14 @@ class CacheManager:
                                     exif_date = metadata.date_taken.isoformat()
                                 # Store embedded caption separately
                                 embedded_caption = metadata.caption
+                                # Extract location from GPS coordinates
+                                if metadata.gps_latitude and metadata.gps_longitude:
+                                    location = reverse_geocode(
+                                        metadata.gps_latitude,
+                                        metadata.gps_longitude
+                                    )
+                                    if location:
+                                        logger.debug(f"Geocoded location: {location}")
                             except Exception as e:
                                 logger.debug(f"Failed to extract metadata: {e}")
 
@@ -513,12 +549,13 @@ class CacheManager:
                             media_type=item.media_type,
                             caption=embedded_caption,  # Start with embedded, may be updated
                             exif_date=exif_date,
-                            album_source=self.config.albums[0].name if self.config.albums else "",
+                            album_source=item.album_name or "",
                             download_date=now,
                             last_seen=now,
                             content_hash=self._get_content_hash(local_path),
                             display_params=None,  # Computed on demand
-                            deleted=False
+                            deleted=False,
+                            location=location
                         )
                         self._media[media_id] = cached
                         stats["new"] += 1
@@ -536,14 +573,28 @@ class CacheManager:
         # Track embedded captions so we can apply precedence later
         embedded_captions: Dict[str, Optional[str]] = {}
 
-        if update_all_captions:
-            # Fetch captions for all photos
+        if force_refetch_captions:
+            # Force re-fetch ALL photos (use when extraction logic changed)
+            # First reset the google_metadata_fetched flag for all photos
             with self._lock:
                 for cached in self._media.values():
                     if cached.media_type == "photo" and not cached.deleted:
+                        cached.google_metadata_fetched = False
                         urls_needing_captions.add(cached.url)
-                        embedded_captions[cached.url] = cached.caption
-            logger.info(f"Updating captions for all {len(urls_needing_captions)} photos...")
+                self._save_metadata()
+            logger.info(f"Force re-fetching Google metadata for ALL {len(urls_needing_captions)} photos...")
+        elif update_all_captions:
+            # Fetch metadata only for photos where google_metadata_fetched=False
+            # Once fetched (even if empty), we never fetch again
+            with self._lock:
+                for cached in self._media.values():
+                    if cached.media_type == "photo" and not cached.deleted:
+                        if not cached.google_metadata_fetched:
+                            urls_needing_captions.add(cached.url)
+            if urls_needing_captions:
+                logger.info(f"Fetching Google metadata for {len(urls_needing_captions)} unfetched photos...")
+            else:
+                logger.info("All photos already have Google metadata fetched")
         else:
             # Only fetch captions for newly downloaded photos
             urls_needing_captions = new_photo_urls
@@ -561,12 +612,14 @@ class CacheManager:
 
         if urls_needing_captions and albums_scraped_successfully > 0:
             self._sync_progress.stage = "fetching_captions"
+            self._sync_progress.downloads_done = 0
+            self._sync_progress.downloads_total = len(urls_needing_captions)
 
             # Counter for batched saves
             captions_since_save = [0]  # Use list to allow modification in nested function
 
-            # Callback to save each caption immediately
-            def on_caption_found(url: str, google_caption: Optional[str]) -> None:
+            # Callback to save each caption and location immediately
+            def on_caption_found(url: str, google_caption: Optional[str], google_location: Optional[str] = None) -> None:
                 media_id = self._get_media_id(url)
                 with self._lock:
                     if media_id not in self._media:
@@ -584,7 +637,15 @@ class CacheManager:
                         self._media[media_id].caption = final_caption
                         stats["captions_updated"] += 1
 
-                    # Save to disk every 10 captions to avoid data loss
+                    # Store Google location separately (always update if available)
+                    if google_location and google_location != self._media[media_id].google_location:
+                        self._media[media_id].google_location = google_location
+
+                    # Mark as fetched - we've tried to get Google metadata for this photo
+                    # This is set even if caption/location are empty, so we don't retry
+                    self._media[media_id].google_metadata_fetched = True
+
+                    # Save to disk every 10 photos to avoid data loss
                     captions_since_save[0] += 1
                     if captions_since_save[0] >= 10:
                         self._save_metadata()
@@ -684,10 +745,19 @@ class CacheManager:
     def _rebuild_playlist(self) -> None:
         """Rebuild the playlist of available media."""
         with self._lock:
-            # Get all non-deleted media
+            # Get enabled album names
+            enabled_albums = {
+                album.name or album.url
+                for album in self.config.albums
+                if album.enabled
+            }
+
+            # Get all non-deleted media from enabled albums
             available = [
                 media_id for media_id, cached in self._media.items()
-                if not cached.deleted and os.path.exists(cached.local_path)
+                if not cached.deleted
+                and os.path.exists(cached.local_path)
+                and cached.album_source in enabled_albums
             ]
 
             # Filter by type if videos disabled
@@ -705,6 +775,14 @@ class CacheManager:
 
             self._playlist = available
             self._playlist_index = 0
+
+    def has_enabled_albums(self) -> bool:
+        """Check if any albums are enabled for display."""
+        return any(album.enabled for album in self.config.albums)
+
+    def rebuild_playlist(self) -> None:
+        """Public method to rebuild playlist after config changes."""
+        self._rebuild_playlist()
 
     def _enforce_cache_limit(self) -> None:
         """Remove old items if cache exceeds size limit."""
@@ -765,6 +843,29 @@ class CacheManager:
             # Reshuffle when we loop back (for random mode)
             if self._playlist_index == 0 and self.config.display.order == "random":
                 random.shuffle(self._playlist)
+
+            return self._media.get(media_id)
+
+    def get_previous_media(self) -> Optional[CachedMedia]:
+        """
+        Get the previous media item for display.
+
+        Returns:
+            CachedMedia or None if no media available.
+        """
+        with self._lock:
+            if not self._playlist:
+                self._rebuild_playlist()
+
+            if not self._playlist:
+                return None
+
+            # Move back 2 positions (since get_next_media already advanced)
+            # This effectively goes back one photo
+            self._playlist_index = (self._playlist_index - 2) % len(self._playlist)
+
+            media_id = self._playlist[self._playlist_index]
+            self._playlist_index = (self._playlist_index + 1) % len(self._playlist)
 
             return self._media.get(media_id)
 
@@ -887,3 +988,62 @@ class CacheManager:
             self._playlist = []
             self._save_metadata()
         logger.info("Cache cleared")
+
+    def extract_locations(self, progress_callback=None) -> int:
+        """
+        Extract locations for existing photos that have GPS but no location.
+
+        Args:
+            progress_callback: Optional callback(current, total) for progress updates.
+
+        Returns:
+            Number of photos updated with location.
+        """
+        updated = 0
+        photos_to_process = []
+
+        with self._lock:
+            for cached in self._media.values():
+                if cached.deleted or cached.media_type != "photo":
+                    continue
+                # Skip if already has location or caption
+                if cached.location or cached.caption:
+                    continue
+                if os.path.exists(cached.local_path):
+                    photos_to_process.append(cached)
+
+        total = len(photos_to_process)
+        logger.info(f"Extracting locations for {total} photos without caption...")
+
+        for i, cached in enumerate(photos_to_process):
+            if progress_callback:
+                progress_callback(i + 1, total)
+
+            try:
+                metadata = self._metadata_extractor.extract(cached.local_path)
+                if metadata.gps_latitude and metadata.gps_longitude:
+                    location = reverse_geocode(
+                        metadata.gps_latitude,
+                        metadata.gps_longitude
+                    )
+                    if location:
+                        with self._lock:
+                            cached.location = location
+                        updated += 1
+                        logger.debug(f"Location for {cached.media_id}: {location}")
+            except Exception as e:
+                logger.debug(f"Failed to extract location for {cached.media_id}: {e}")
+
+            # Save periodically
+            if updated > 0 and updated % 10 == 0:
+                with self._lock:
+                    self._save_metadata()
+                logger.info(f"Extracted {updated} locations so far...")
+
+        # Final save
+        if updated > 0:
+            with self._lock:
+                self._save_metadata()
+
+        logger.info(f"Extracted locations for {updated} photos")
+        return updated

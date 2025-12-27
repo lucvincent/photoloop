@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """Debug script to visualize face detection and crop regions."""
 
 import sys

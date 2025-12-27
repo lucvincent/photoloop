@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Display engine for PhotoLoop.
 Uses SDL2's hardware-accelerated texture rendering for smooth transitions.
@@ -157,6 +158,11 @@ class Display:
 
         # Track display power state
         self._display_powered = True
+
+        # Photo control state
+        self._paused = False
+        self._skip_requested = False
+        self._previous_requested = False
 
     def _init_fonts(self) -> None:
         """Initialize fonts for overlay and clock."""
@@ -487,6 +493,69 @@ class Display:
         self._current_texture.draw(dstrect=(current_x, current_y, w, h))
         self._next_texture.draw(dstrect=(next_x, next_y, w, h))
 
+    def _build_caption(self, overlay_cfg: OverlayConfig) -> Optional[str]:
+        """
+        Build caption string from available sources based on priority settings.
+
+        Sources are sorted by priority (lower number = higher priority).
+        Returns up to max_caption_sources, joined by caption_separator.
+        """
+        if not self._current_media:
+            return None
+
+        # Get caption source priorities (default if not configured)
+        source_priorities = getattr(overlay_cfg, 'caption_sources', {
+            "google_description": 1,
+            "embedded": 2,
+            "google_location": 3
+        })
+        max_sources = getattr(overlay_cfg, 'max_caption_sources', 1)
+        separator = getattr(overlay_cfg, 'caption_separator', " — ")
+
+        # Placeholder values to filter out
+        invalid_values = {'unknown location', 'add location', 'add a description'}
+
+        # Collect available caption values with their priorities
+        available = []
+
+        # Google description (stored in 'caption' field when from Google Photos)
+        if "google_description" in source_priorities:
+            # The 'caption' field holds the Google Photos description
+            value = self._current_media.caption
+            if value and value.lower() not in invalid_values:
+                available.append((source_priorities["google_description"], value))
+
+        # Embedded EXIF/IPTC caption
+        # Note: Currently we don't have a separate field for embedded caption
+        # The 'caption' field is used for Google description, so embedded would need
+        # to be stored separately. For now, skip if google_description is already using caption.
+        # TODO: Add embedded_caption field to CachedMedia for true EXIF/IPTC support
+
+        # Google location
+        if "google_location" in source_priorities:
+            value = self._current_media.google_location
+            if value and value.lower() not in invalid_values:
+                available.append((source_priorities["google_location"], value))
+
+        # EXIF GPS location (reverse-geocoded)
+        # This uses the 'location' field which is from EXIF GPS coordinates
+        if "exif_location" in source_priorities:
+            value = self._current_media.location
+            if value and value.lower() not in invalid_values:
+                available.append((source_priorities["exif_location"], value))
+
+        if not available:
+            return None
+
+        # Sort by priority (lower number = higher priority)
+        available.sort(key=lambda x: x[0])
+
+        # Take top N sources
+        selected = [value for _, value in available[:max_sources]]
+
+        # Join with separator
+        return separator.join(selected) if selected else None
+
     def _render_overlay(self) -> None:
         """Render the metadata overlay."""
         if not self._current_media:
@@ -504,13 +573,17 @@ class Display:
             except Exception:
                 pass
 
-        if overlay_cfg.show_caption and self._current_media.caption:
-            caption = self._current_media.caption
-            if overlay_cfg.max_caption_length > 0:
-                caption = caption[:overlay_cfg.max_caption_length]
-                if len(self._current_media.caption) > overlay_cfg.max_caption_length:
-                    caption += "..."
-            lines.append(caption)
+        if overlay_cfg.show_caption:
+            # Build caption from available sources based on priority
+            # Lower priority number = higher priority (shown first)
+            caption = self._build_caption(overlay_cfg)
+            if caption:
+                if overlay_cfg.max_caption_length > 0:
+                    original_len = len(caption)
+                    caption = caption[:overlay_cfg.max_caption_length]
+                    if original_len > overlay_cfg.max_caption_length:
+                        caption += "..."
+                lines.append(caption)
 
         if not lines:
             return
@@ -731,8 +804,58 @@ class Display:
         """Check if current photo has been displayed long enough."""
         if self.mode != DisplayMode.SLIDESHOW:
             return False
+        # Skip requested overrides everything
+        if self._skip_requested:
+            self._skip_requested = False
+            return True
+        # Paused means never complete
+        if self._paused:
+            return False
         elapsed = time.time() - self._kb_start_time
         return elapsed >= self._kb_duration
+
+    def skip_to_next(self) -> None:
+        """Request skip to next photo."""
+        self._skip_requested = True
+        self._previous_requested = False
+        logger.debug("Skip to next requested")
+
+    def skip_to_previous(self) -> None:
+        """Request skip to previous photo."""
+        self._previous_requested = True
+        self._skip_requested = False
+        logger.debug("Skip to previous requested")
+
+    def is_previous_requested(self) -> bool:
+        """Check and clear previous request flag."""
+        if self._previous_requested:
+            self._previous_requested = False
+            return True
+        return False
+
+    def pause(self) -> None:
+        """Pause the slideshow on the current photo."""
+        self._paused = True
+        logger.info("Slideshow paused")
+
+    def resume(self) -> None:
+        """Resume the slideshow auto-advance."""
+        self._paused = False
+        # Reset the timer so we get a full duration on this photo
+        self._kb_start_time = time.time()
+        logger.info("Slideshow resumed")
+
+    def toggle_pause(self) -> bool:
+        """Toggle pause state. Returns new paused state."""
+        if self._paused:
+            self.resume()
+        else:
+            self.pause()
+        return self._paused
+
+    def is_paused(self) -> bool:
+        """Check if slideshow is paused."""
+        return self._paused
 
     def handle_events(self) -> list:
         """Process pygame events."""
