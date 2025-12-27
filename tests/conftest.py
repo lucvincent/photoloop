@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Pytest configuration and shared fixtures for PhotoLoop tests.
 """
