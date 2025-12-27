@@ -38,65 +38,60 @@
         <!-- Control Tab -->
         <section id="control" class="tab-content active">
             <h2>Photo Control</h2>
-            <div class="control-buttons" id="photo-control-buttons">
+            <div class="control-buttons" id="photo-control-buttons" style="margin-bottom: 8px;">
                 <button id="btn-prev" class="btn">Previous</button>
                 <button id="btn-pause" class="btn btn-primary">Pause</button>
                 <button id="btn-next" class="btn">Next</button>
             </div>
-            <div id="photo-control-status" style="font-size: 0.85em; color: var(--text-muted); margin-top: 8px;">
+            <p class="help-text" id="photo-control-status">
                 Use these controls to navigate photos or pause the slideshow on a specific photo.
-            </div>
+            </p>
 
-            <h2 style="margin-top: 30px;">Slideshow Control</h2>
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
+            <h2>Slideshow Control</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; margin-bottom: 8px;">
                 <div class="control-buttons" style="margin: 0;">
                     <button id="btn-start" class="btn btn-success">Start</button>
                     <button id="btn-stop" class="btn btn-danger">Stop</button>
                     <button id="btn-pause-schedule" class="btn btn-primary" style="display: none;">Pause Schedule</button>
                 </div>
-                <div class="form-group" style="margin: 0;">
-                    <label style="display: flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" id="schedule-enabled-control"
-                               {% if config.schedule.enabled %}checked{% endif %}>
-                        Schedule Enabled
-                    </label>
-                </div>
+                <label class="checkbox-inline">
+                    <input type="checkbox" id="schedule-enabled-control"
+                           {% if config.schedule.enabled %}checked{% endif %}>
+                    Schedule Enabled
+                </label>
             </div>
-            <div id="temp-override-info" style="display: none; font-size: 0.85em; color: var(--warning); margin-top: 12px;">
+            <div id="temp-override-info" class="help-text" style="display: none; color: var(--warning);">
                 <strong>Temporary override active.</strong> Slideshow will resume normal schedule at <span id="temp-override-until">-</span>.
                 <button id="btn-resume-schedule" class="btn btn-small" style="margin-left: 10px;">Resume Schedule Now</button>
             </div>
 
-            <div class="status-box">
-                <h3>Current Status</h3>
+            <div class="status-box" style="margin-top: 20px;">
+                <h3 style="margin-top: 0;">Current Status: <span id="state" class="status-badge">-</span></h3>
                 <div id="current-status">
-                    <p><strong>Display:</strong> <span id="state" class="status-badge">-</span></p>
-                    <p><strong>Next Transition:</strong> <span id="next-transition">-</span></p>
+                    <p><strong>Next Change:</strong> <span id="next-transition">-</span></p>
                     <p><strong>Photos Cached:</strong> <span id="photo-count">-</span></p>
                     <p><strong>Cache Size:</strong> <span id="cache-size">-</span> MB</p>
                 </div>
             </div>
 
-            <div class="sync-section">
-                <h3>Album Sync</h3>
-                <div class="form-group" style="margin-bottom: 10px;">
-                    <label>
-                        <input type="checkbox" id="update-all-captions">
-                        Update all captions from Google Photos
-                    </label>
-                    <div style="font-size: 0.85em; color: var(--text-muted); margin-top: 4px; margin-left: 26px;">
-                        Check this to re-fetch captions for all photos (slower). Otherwise, only new photos get captions.
-                    </div>
-                </div>
-                <button id="btn-sync" class="btn btn-primary">Sync Now</button>
+            <h3>Album Sync</h3>
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label class="checkbox-inline">
+                    <input type="checkbox" id="update-all-captions">
+                    Update all captions from Google Photos
+                </label>
+                <p class="help-text" style="margin: 4px 0 0 26px;">
+                    Check this to re-fetch captions for all photos (slower). Otherwise, only new photos get captions.
+                </p>
             </div>
-            <div id="sync-progress" style="display: none; margin-top: 15px; padding: 15px; background: #16213e; border-radius: 8px; border: 1px solid #333;">
-                <div id="sync-stage" style="font-weight: bold; margin-bottom: 10px; color: #4fc3f7;">Starting sync...</div>
-                <div id="sync-details" style="font-size: 14px; color: #aaa;"></div>
-                <div style="margin-top: 10px; background: #0a1628; border-radius: 4px; height: 20px; overflow: hidden;">
-                    <div id="sync-progress-bar" style="background: #4CAF50; height: 100%; width: 0%; transition: width 0.3s;"></div>
+            <button id="btn-sync" class="btn btn-primary">Sync Now</button>
+            <div id="sync-progress" class="sync-progress-box">
+                <div id="sync-stage">Starting sync...</div>
+                <div id="sync-details"></div>
+                <div class="progress-bar-container">
+                    <div id="sync-progress-bar"></div>
                 </div>
-                <div id="sync-progress-text" style="text-align: center; margin-top: 5px; font-size: 12px; color: #81d4fa;"></div>
+                <div id="sync-progress-text"></div>
             </div>
         </section>
 
@@ -174,13 +169,9 @@
         <section id="schedule" class="tab-content">
             <h2>Schedule Settings</h2>
 
-            <div class="form-group">
-                <label>
-                    <input type="checkbox" id="schedule-enabled"
-                           {% if config.schedule.enabled %}checked{% endif %}>
-                    Enable Schedule
-                </label>
-            </div>
+            <p class="help-text" style="margin-bottom: 15px;">
+                Use Slideshow Control to enable or disable the schedule.
+            </p>
 
             <h3>Weekday Schedule (Mon-Fri)</h3>
             <div class="time-range">
@@ -277,11 +268,17 @@
                     // Map scheduler state to user-friendly display
                     const stateEl = document.getElementById('state');
                     const state = status.schedule.state;
+                    const isPaused = status.photo_control && status.photo_control.paused;
                     let displayText, badgeClass;
 
                     if (state === 'active' || state === 'force_on') {
-                        displayText = 'Running';
-                        badgeClass = 'status-badge running';
+                        if (isPaused) {
+                            displayText = 'Paused';
+                            badgeClass = 'status-badge paused';
+                        } else {
+                            displayText = 'Running';
+                            badgeClass = 'status-badge running';
+                        }
                     } else if (state === 'off_hours') {
                         displayText = 'Off-Hours';
                         badgeClass = 'status-badge off-hours';
@@ -296,12 +293,17 @@
                     stateEl.textContent = displayText;
                     stateEl.className = badgeClass;
 
-                    if (status.schedule.next_transition.time) {
+                    if (status.schedule.next_transition && status.schedule.next_transition.time) {
                         const nextTime = new Date(status.schedule.next_transition.time);
+                        const timeStr = nextTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                         document.getElementById('next-transition').textContent =
-                            `${nextTime.toLocaleTimeString()} - ${status.schedule.next_transition.description}`;
+                            `${status.schedule.next_transition.description} at ${timeStr}`;
+                    } else if (status.schedule.has_override) {
+                        document.getElementById('next-transition').textContent = 'None (manual control active)';
+                    } else if (!status.schedule_enabled) {
+                        document.getElementById('next-transition').textContent = 'None (schedule disabled)';
                     } else {
-                        document.getElementById('next-transition').textContent = 'Manual override active';
+                        document.getElementById('next-transition').textContent = '-';
                     }
                 }
 
@@ -364,15 +366,17 @@
                 // Update photo control pause button
                 if (status.photo_control) {
                     const pauseBtn = document.getElementById('btn-pause');
-                    const statusDiv = document.getElementById('photo-control-status');
+                    const statusEl = document.getElementById('photo-control-status');
                     if (status.photo_control.paused) {
                         pauseBtn.textContent = 'Resume';
                         pauseBtn.className = 'btn btn-success';
-                        statusDiv.innerHTML = '<strong style="color: var(--warning);">Slideshow paused.</strong> Click Resume to continue auto-advance.';
+                        statusEl.innerHTML = '<strong style="color: var(--warning);">Slideshow paused.</strong> Click Resume to continue auto-advance.';
+                        statusEl.style.color = 'var(--text-secondary)';
                     } else {
                         pauseBtn.textContent = 'Pause';
                         pauseBtn.className = 'btn btn-primary';
-                        statusDiv.textContent = 'Use these controls to navigate photos or pause the slideshow on a specific photo.';
+                        statusEl.textContent = 'Use these controls to navigate photos or pause the slideshow on a specific photo.';
+                        statusEl.style.color = '';
                     }
                 }
 

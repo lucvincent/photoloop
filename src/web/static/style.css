@@ -124,6 +124,12 @@ header h1 {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
+.status-badge.paused {
+    background: linear-gradient(135deg, var(--info), #5a8a80);
+    color: white;
+    box-shadow: 0 2px 8px rgba(106, 154, 144, 0.3);
+}
+
 /* Tabs */
 .tabs {
     display: flex;
@@ -180,6 +186,24 @@ header h1 {
     margin: 20px 0 15px;
     color: var(--sage-accent);
     font-size: 1.1em;
+}
+
+/* Help text below controls */
+.help-text {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    margin: 0 0 20px 0;
+    line-height: 1.5;
+}
+
+/* Inline checkbox label */
+.checkbox-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 0.95em;
+    cursor: pointer;
 }
 
 /* Form Elements */
@@ -352,33 +376,47 @@ input[type="checkbox"] {
     color: var(--sage-accent);
 }
 
-/* Sync Section */
-.sync-section {
-    display: flex;
-    align-items: center;
-    gap: 15px;
+/* Sync Progress Box */
+.sync-progress-box {
+    display: none;
+    margin-top: 15px;
+    padding: 15px;
+    background: var(--bg-dark);
+    border-radius: 8px;
+    border: 1px solid var(--bg-light);
 }
 
-#sync-status {
+.sync-progress-box #sync-stage {
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: var(--sage-bright);
+}
+
+.sync-progress-box #sync-details {
+    font-size: 0.9em;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.sync-progress-box .progress-bar-container {
+    background: var(--bg-darkest);
+    border-radius: 4px;
+    height: 20px;
+    overflow: hidden;
+}
+
+.sync-progress-box #sync-progress-bar {
+    background: linear-gradient(90deg, var(--sage-primary), var(--sage-light));
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s;
+}
+
+.sync-progress-box #sync-progress-text {
+    text-align: center;
+    margin-top: 8px;
+    font-size: 0.85em;
     color: var(--sage-accent);
-}
-
-/* Sync Progress */
-#sync-progress {
-    background: var(--bg-dark) !important;
-    border: 1px solid var(--bg-light) !important;
-}
-
-#sync-stage {
-    color: var(--sage-bright) !important;
-}
-
-#sync-progress-bar {
-    background: linear-gradient(90deg, var(--sage-primary), var(--sage-light)) !important;
-}
-
-#sync-progress-text {
-    color: var(--sage-accent) !important;
 }
 
 /* Album List */
