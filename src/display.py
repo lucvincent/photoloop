@@ -193,6 +193,11 @@ class Display:
         if self._clock_font is None:
             self._clock_font = pygame.font.Font(None, 120)
 
+    def reload_fonts(self) -> None:
+        """Reload fonts when config changes (e.g., font size updated)."""
+        logger.info(f"Reloading fonts (font_size={self.config.overlay.font_size})")
+        self._init_fonts()
+
     def _pil_to_texture(self, pil_image: Image.Image) -> sdl2.Texture:
         """Convert PIL Image to SDL2 Texture (GPU-resident)."""
         if pil_image.mode != "RGB":
@@ -265,6 +270,15 @@ class Display:
 
             target_w = int(self.screen_width * kb_scale)
             target_h = int(self.screen_height * kb_scale)
+
+            # Cap texture dimensions to SDL2's 4096 limit
+            max_texture_size = 4096
+            if target_w > max_texture_size or target_h > max_texture_size:
+                scale_down = min(max_texture_size / target_w, max_texture_size / target_h)
+                target_w = int(target_w * scale_down)
+                target_h = int(target_h * scale_down)
+                logger.debug(f"Capped Ken Burns texture to {target_w}x{target_h}")
+
             source_image = cropped.resize(
                 (target_w, target_h),
                 Image.Resampling.BILINEAR
@@ -505,8 +519,8 @@ class Display:
 
         # Get caption source priorities (default if not configured)
         source_priorities = getattr(overlay_cfg, 'caption_sources', {
-            "google_description": 1,
-            "embedded": 2,
+            "google_caption": 1,
+            "embedded_caption": 2,
             "google_location": 3
         })
         max_sources = getattr(overlay_cfg, 'max_caption_sources', 1)
@@ -518,27 +532,25 @@ class Display:
         # Collect available caption values with their priorities
         available = []
 
-        # Google description (stored in 'caption' field when from Google Photos)
-        if "google_description" in source_priorities:
-            # The 'caption' field holds the Google Photos description
-            value = self._current_media.caption
+        # Google caption/description from Google Photos DOM
+        if "google_caption" in source_priorities:
+            value = self._current_media.google_caption
             if value and value.lower() not in invalid_values:
-                available.append((source_priorities["google_description"], value))
+                available.append((source_priorities["google_caption"], value))
 
-        # Embedded EXIF/IPTC caption
-        # Note: Currently we don't have a separate field for embedded caption
-        # The 'caption' field is used for Google description, so embedded would need
-        # to be stored separately. For now, skip if google_description is already using caption.
-        # TODO: Add embedded_caption field to CachedMedia for true EXIF/IPTC support
+        # Embedded EXIF/IPTC caption from photo file
+        if "embedded_caption" in source_priorities:
+            value = self._current_media.embedded_caption
+            if value and value.lower() not in invalid_values:
+                available.append((source_priorities["embedded_caption"], value))
 
-        # Google location
+        # Google location from Google Photos DOM
         if "google_location" in source_priorities:
             value = self._current_media.google_location
             if value and value.lower() not in invalid_values:
                 available.append((source_priorities["google_location"], value))
 
         # EXIF GPS location (reverse-geocoded)
-        # This uses the 'location' field which is from EXIF GPS coordinates
         if "exif_location" in source_priorities:
             value = self._current_media.location
             if value and value.lower() not in invalid_values:
@@ -589,9 +601,15 @@ class Display:
             return
 
         # Render text to surfaces
+        # Calculate max characters to fit within screen width with some margin
+        # Approximate character width is ~0.6 * font_size for most fonts
+        char_width_approx = overlay_cfg.font_size * 0.6
+        max_overlay_width = min(self.screen_width - 2 * overlay_cfg.padding, 3800)  # Cap at 3800 to stay under 4096
+        max_chars = max(20, int(max_overlay_width / char_width_approx))
+
         text_surfaces = []
         for line in lines:
-            wrapped = self._wrap_text(line, overlay_cfg.font_size)
+            wrapped = self._wrap_text(line, max_chars)
             for wrapped_line in wrapped:
                 surf = self._overlay_font.render(
                     wrapped_line,
@@ -610,6 +628,14 @@ class Display:
 
         bg_width = max_width + padding * 2
         bg_height = total_height + padding * 2
+
+        # Safety cap: ensure overlay doesn't exceed SDL2 texture limits
+        max_texture_size = 4000  # Leave margin under 4096
+        if bg_width > max_texture_size or bg_height > max_texture_size:
+            logger.warning(f"Overlay too large ({bg_width}x{bg_height}), capping to {max_texture_size}")
+            bg_width = min(bg_width, max_texture_size)
+            bg_height = min(bg_height, max_texture_size)
+
         bg_color = tuple(overlay_cfg.background_color)
 
         # Create background surface with alpha
