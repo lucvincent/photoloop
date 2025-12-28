@@ -313,6 +313,7 @@ echo -e "${YELLOW}[7/7] Creating CLI commands...${NC}"
 # Create CLI wrapper script
 cat > /usr/local/bin/photoloop << 'EOF'
 #!/bin/bash
+cd /opt/photoloop
 /opt/photoloop/venv/bin/python -m photoloop.src.cli "$@"
 EOF
 
@@ -359,6 +360,10 @@ echo "  photoloop start     - Force slideshow on"
 echo "  photoloop stop      - Force slideshow off"
 echo "  photoloop resume    - Resume schedule"
 echo "  photoloop sync      - Sync albums now"
+echo ""
+echo "Update commands:"
+echo "  photoloop update --check  - Check for available updates"
+echo "  photoloop update          - Apply updates"
 echo ""
 echo "Test commands:"
 echo "  photoloop-test           - Run health checks"

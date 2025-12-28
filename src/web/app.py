@@ -369,6 +369,109 @@ def create_app(
             logger.error(f"Error toggling schedule: {e}")
             return jsonify({"error": str(e)}), 500
 
+    @app.route('/api/schedule', methods=['POST'])
+    def api_save_schedule():
+        """Save schedule settings (times and off-hours mode)."""
+        try:
+            data = request.get_json()
+            if data is None:
+                return jsonify({"error": "No data provided"}), 400
+
+            config_path = app.photoloop_config.config_path
+            if config_path:
+                import yaml
+                with open(config_path, 'r') as f:
+                    config_data = yaml.safe_load(f) or {}
+
+                if 'schedule' not in config_data:
+                    config_data['schedule'] = {}
+
+                # Update weekday schedule
+                if 'weekday_start' in data or 'weekday_end' in data:
+                    if 'weekday' not in config_data['schedule']:
+                        config_data['schedule']['weekday'] = {}
+                    if 'weekday_start' in data:
+                        config_data['schedule']['weekday']['start_time'] = data['weekday_start']
+                    if 'weekday_end' in data:
+                        config_data['schedule']['weekday']['end_time'] = data['weekday_end']
+
+                # Update weekend schedule
+                if 'weekend_start' in data or 'weekend_end' in data:
+                    if 'weekend' not in config_data['schedule']:
+                        config_data['schedule']['weekend'] = {}
+                    if 'weekend_start' in data:
+                        config_data['schedule']['weekend']['start_time'] = data['weekend_start']
+                    if 'weekend_end' in data:
+                        config_data['schedule']['weekend']['end_time'] = data['weekend_end']
+
+                # Update off-hours mode
+                if 'off_hours_mode' in data:
+                    config_data['schedule']['off_hours_mode'] = data['off_hours_mode']
+
+                with open(config_path, 'w') as f:
+                    yaml.dump(config_data, f, default_flow_style=False)
+
+            # Notify of config change
+            if app.on_config_change:
+                app.on_config_change()
+
+            return jsonify({"success": True})
+
+        except Exception as e:
+            logger.error(f"Error saving schedule: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route('/api/display', methods=['POST'])
+    def api_save_display():
+        """Save display settings."""
+        try:
+            data = request.get_json()
+            if data is None:
+                return jsonify({"error": "No data provided"}), 400
+
+            config_path = app.photoloop_config.config_path
+            if config_path:
+                import yaml
+                with open(config_path, 'r') as f:
+                    config_data = yaml.safe_load(f) or {}
+
+                # Update display settings
+                if 'display' not in config_data:
+                    config_data['display'] = {}
+                if 'photo_duration_seconds' in data:
+                    config_data['display']['photo_duration_seconds'] = int(data['photo_duration_seconds'])
+                if 'transition_type' in data:
+                    config_data['display']['transition_type'] = data['transition_type']
+                if 'order' in data:
+                    config_data['display']['order'] = data['order']
+
+                # Update ken_burns settings
+                if 'ken_burns' not in config_data:
+                    config_data['ken_burns'] = {}
+                if 'ken_burns_enabled' in data:
+                    config_data['ken_burns']['enabled'] = bool(data['ken_burns_enabled'])
+
+                # Update overlay settings
+                if 'overlay' not in config_data:
+                    config_data['overlay'] = {}
+                if 'overlay_enabled' in data:
+                    config_data['overlay']['enabled'] = bool(data['overlay_enabled'])
+                if 'overlay_font_size' in data:
+                    config_data['overlay']['font_size'] = int(data['overlay_font_size'])
+
+                with open(config_path, 'w') as f:
+                    yaml.dump(config_data, f, default_flow_style=False)
+
+            # Notify of config change
+            if app.on_config_change:
+                app.on_config_change()
+
+            return jsonify({"success": True})
+
+        except Exception as e:
+            logger.error(f"Error saving display settings: {e}")
+            return jsonify({"error": str(e)}), 500
+
     @app.route('/api/photos')
     def api_photos():
         """Get list of cached photos."""
@@ -380,7 +483,9 @@ def create_app(
             {
                 "id": m.media_id,
                 "type": m.media_type,
-                "caption": m.caption,
+                "google_caption": m.google_caption,
+                "embedded_caption": m.embedded_caption,
+                "google_location": m.google_location,
                 "date": m.exif_date,
                 "path": m.local_path
             }

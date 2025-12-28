@@ -36,10 +36,7 @@ class SyncConfig:
     sync_on_start: bool = False  # Whether to sync immediately on service start
     full_resolution: bool = True
     max_dimension: int = 1920
-    # Caption source precedence: "google_photos" or "embedded"
-    # "google_photos": Use Google Photos caption if available, fall back to embedded
-    # "embedded": Use embedded EXIF/IPTC caption if available, fall back to Google Photos
-    caption_precedence: str = "google_photos"
+    # Note: Caption priority is now configured in overlay.caption_sources at display time
 
 
 @dataclass
@@ -90,10 +87,10 @@ class OverlayConfig:
     padding: int = 20
     max_caption_length: int = 200
     # Caption source priorities (lower number = higher priority)
-    # Available sources: google_description, embedded, google_location
+    # Available sources: google_caption, embedded_caption, google_location, exif_location
     caption_sources: Dict[str, int] = field(default_factory=lambda: {
-        "google_description": 1,
-        "embedded": 2,
+        "google_caption": 1,
+        "embedded_caption": 2,
         "google_location": 3
     })
     # How many caption sources to show (1 = just highest priority with data)

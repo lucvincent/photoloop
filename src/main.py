@@ -248,6 +248,7 @@ class PhotoLoop:
                 self.scheduler.config = self.config
             if self.display:
                 self.display.config = self.config
+                self.display.reload_fonts()
             if self.cache_manager:
                 self.cache_manager.config = self.config
                 # Rebuild playlist to reflect album enable/disable changes

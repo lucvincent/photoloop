@@ -60,15 +60,49 @@ src/
 ## Commands
 
 ```bash
-# Run the app
+# Run the app (development)
 python -m src.main
 
 # CLI commands
-photoloop start/stop/status/sync/reload
+photoloop status              # Show current status
+photoloop start               # Force slideshow on
+photoloop stop                # Force slideshow off
+photoloop resume              # Resume normal schedule
+photoloop next                # Skip to next photo
+photoloop sync                # Sync albums (download photos)
+photoloop reload              # Reload configuration
+photoloop albums              # List configured albums
+photoloop add-album URL       # Add a new album
+photoloop photos              # List cached photos
+photoloop update --check      # Check for available updates
+photoloop update              # Apply available updates
 
-# Service
+# Service management
 sudo systemctl start/stop/restart/status photoloop
+
+# View logs
+sudo journalctl -u photoloop -f
 ```
+
+## Updating PhotoLoop
+
+PhotoLoop includes a built-in update mechanism:
+
+```bash
+# Check what updates are available (safe, no changes made)
+photoloop update --check
+
+# Apply updates (updates Python packages, pulls code, restarts service)
+photoloop update
+```
+
+The update command will:
+1. Check for outdated Python packages in the virtual environment
+2. Check for PhotoLoop code updates (if installed from git)
+3. Apply updates and restart the service
+
+**Note:** System packages (Chromium, SDL2, etc.) are not updated automatically.
+Run `sudo apt update && sudo apt upgrade` periodically for system updates.
 
 ## Configuration
 

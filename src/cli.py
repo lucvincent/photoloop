@@ -8,8 +8,9 @@ Provides commands to control and manage the photo frame.
 import argparse
 import json
 import os
+import subprocess
 import sys
-from typing import Optional
+from typing import Optional, Tuple, List
 
 import requests
 
@@ -192,6 +193,182 @@ def cmd_photos(args):
         print(f"[{media_type}] {date} {caption}")
 
 
+# ============================================================================
+# Update Command
+# ============================================================================
+
+INSTALL_DIR = "/opt/photoloop"
+VENV_PIP = f"{INSTALL_DIR}/venv/bin/pip"
+REQUIREMENTS_FILE = f"{INSTALL_DIR}/requirements.txt"
+SOURCE_DIR = "/home/luc/photoloop"  # Development source (if using git)
+
+
+def run_command(cmd: List[str], capture: bool = True) -> Tuple[int, str, str]:
+    """Run a command and return (returncode, stdout, stderr)."""
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=capture,
+            text=True,
+            timeout=120
+        )
+        return result.returncode, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        return 1, "", "Command timed out"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def check_outdated_packages() -> List[dict]:
+    """Check for outdated Python packages in the venv."""
+    returncode, stdout, stderr = run_command([VENV_PIP, "list", "--outdated", "--format=json"])
+    if returncode != 0:
+        return []
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+
+
+def check_git_status() -> Tuple[bool, str, str]:
+    """
+    Check if there are updates available in git.
+    Returns (has_updates, current_commit, remote_commit).
+    """
+    # Check if we're in a git repo
+    if not os.path.isdir(os.path.join(SOURCE_DIR, ".git")):
+        return False, "", ""
+
+    # Fetch latest from remote (quietly)
+    run_command(["git", "-C", SOURCE_DIR, "fetch", "--quiet"])
+
+    # Get current commit
+    rc, current, _ = run_command(["git", "-C", SOURCE_DIR, "rev-parse", "--short", "HEAD"])
+    current = current.strip() if rc == 0 else ""
+
+    # Get remote commit
+    rc, remote, _ = run_command(["git", "-C", SOURCE_DIR, "rev-parse", "--short", "origin/main"])
+    remote = remote.strip() if rc == 0 else ""
+
+    # Check if behind
+    rc, behind, _ = run_command([
+        "git", "-C", SOURCE_DIR, "rev-list", "--count", "HEAD..origin/main"
+    ])
+    has_updates = behind.strip() != "0" if rc == 0 else False
+
+    return has_updates, current, remote
+
+
+def cmd_update(args):
+    """Check for and apply updates."""
+    check_only = args.check
+
+    print("PhotoLoop Update")
+    print("=" * 50)
+    print()
+
+    updates_available = False
+
+    # Check Python packages
+    print("Checking Python packages...")
+    outdated = check_outdated_packages()
+
+    if outdated:
+        updates_available = True
+        print(f"  {len(outdated)} package(s) can be updated:")
+        for pkg in outdated:
+            print(f"    - {pkg['name']}: {pkg['version']} → {pkg['latest_version']}")
+    else:
+        print("  All Python packages are up to date.")
+
+    print()
+
+    # Check for PhotoLoop code updates (git)
+    print("Checking PhotoLoop code...")
+    has_git_updates, current, remote = check_git_status()
+
+    if has_git_updates:
+        updates_available = True
+        print(f"  Code updates available: {current} → {remote}")
+    elif current:
+        print(f"  PhotoLoop code is up to date (commit: {current})")
+    else:
+        print("  Not installed from git, skipping code update check.")
+
+    print()
+
+    # Check system packages (just info, we don't auto-update these)
+    print("System packages:")
+    print("  Run 'sudo apt update && sudo apt upgrade' to update system packages.")
+
+    print()
+
+    if not updates_available:
+        print("✓ Everything is up to date!")
+        return
+
+    if check_only:
+        print("─" * 50)
+        print("Run 'photoloop update' (without --check) to apply updates.")
+        return
+
+    # Apply updates
+    print("─" * 50)
+    print("Applying updates...")
+    print()
+
+    # Update Python packages
+    if outdated:
+        print("Updating Python packages...")
+        returncode, stdout, stderr = run_command([
+            VENV_PIP, "install", "--upgrade", "-r", REQUIREMENTS_FILE
+        ])
+        if returncode == 0:
+            print("  ✓ Python packages updated")
+        else:
+            print(f"  ✗ Error updating packages: {stderr}")
+
+    # Update PhotoLoop code
+    if has_git_updates:
+        print("Updating PhotoLoop code...")
+
+        # Pull latest
+        returncode, stdout, stderr = run_command([
+            "git", "-C", SOURCE_DIR, "pull", "--ff-only"
+        ])
+
+        if returncode == 0:
+            print("  ✓ Code updated")
+
+            # Copy to install directory
+            print("  Installing updated code...")
+            returncode, _, stderr = run_command([
+                "sudo", "cp", "-r", f"{SOURCE_DIR}/src/.", f"{INSTALL_DIR}/photoloop/src/"
+            ])
+
+            if returncode == 0:
+                print("  ✓ Code installed")
+            else:
+                print(f"  ✗ Error installing code: {stderr}")
+        else:
+            print(f"  ✗ Error pulling updates: {stderr}")
+
+    print()
+
+    # Restart service
+    print("Restarting PhotoLoop service...")
+    returncode, _, stderr = run_command(["sudo", "systemctl", "restart", "photoloop"])
+
+    if returncode == 0:
+        print("  ✓ Service restarted")
+    else:
+        print(f"  ✗ Error restarting service: {stderr}")
+
+    print()
+    print("─" * 50)
+    print("✓ Update complete!")
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -206,6 +383,8 @@ Examples:
   photoloop sync            Download new photos
   photoloop albums          List configured albums
   photoloop add-album URL   Add a new album
+  photoloop update --check  Check for available updates
+  photoloop update          Apply available updates
 
 Environment:
   PHOTOLOOP_API_URL    API URL (default: http://localhost:8080)
@@ -237,6 +416,14 @@ Environment:
     # Photos
     subparsers.add_parser("photos", help="List cached photos")
 
+    # Update
+    update_parser = subparsers.add_parser("update", help="Check for and apply updates")
+    update_parser.add_argument(
+        "--check", "-c",
+        action="store_true",
+        help="Check for updates without applying them"
+    )
+
     # Parse and execute
     args = parser.parse_args()
 
@@ -255,6 +442,7 @@ Environment:
         "albums": cmd_albums,
         "add-album": cmd_add_album,
         "photos": cmd_photos,
+        "update": cmd_update,
     }
 
     if args.command in commands:

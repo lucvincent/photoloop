@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 import random
 
 import requests
@@ -67,7 +67,8 @@ class CachedMedia:
     url: str                         # Original Google Photos URL
     local_path: str                  # Path to cached file
     media_type: str                  # "photo" or "video"
-    caption: Optional[str] = None    # From Google Photos or embedded EXIF/IPTC
+    google_caption: Optional[str] = None    # Caption/description from Google Photos DOM
+    embedded_caption: Optional[str] = None  # Caption from embedded EXIF/IPTC metadata
     exif_date: Optional[str] = None  # ISO format date string
     album_source: str = ""           # Which album it came from
     download_date: str = ""          # When first downloaded
@@ -86,7 +87,8 @@ class CachedMedia:
             "url": self.url,
             "local_path": self.local_path,
             "media_type": self.media_type,
-            "caption": self.caption,
+            "google_caption": self.google_caption,
+            "embedded_caption": self.embedded_caption,
             "exif_date": self.exif_date,
             "album_source": self.album_source,
             "download_date": self.download_date,
@@ -102,12 +104,28 @@ class CachedMedia:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CachedMedia":
+        # Migration: handle old 'caption' field
+        google_caption = data.get("google_caption")
+        embedded_caption = data.get("embedded_caption")
+
+        # If old 'caption' field exists and new fields don't, migrate it
+        if "caption" in data and google_caption is None and embedded_caption is None:
+            old_caption = data.get("caption")
+            if old_caption:
+                # If Google metadata was fetched, old caption is likely Google caption
+                # Otherwise it's the embedded caption
+                if data.get("google_metadata_fetched", False):
+                    google_caption = old_caption
+                else:
+                    embedded_caption = old_caption
+
         return cls(
             media_id=data["media_id"],
             url=data["url"],
             local_path=data["local_path"],
             media_type=data["media_type"],
-            caption=data.get("caption"),
+            google_caption=google_caption,
+            embedded_caption=embedded_caption,
             exif_date=data.get("exif_date"),
             album_source=data.get("album_source", ""),
             download_date=data.get("download_date", ""),
@@ -506,9 +524,9 @@ class CacheManager:
                     if item.album_name:
                         existing.album_source = item.album_name
 
-                    # Check if caption changed
-                    if item.caption and item.caption != existing.caption:
-                        existing.caption = item.caption
+                    # Check if Google caption changed (rarely populated during scrape)
+                    if item.caption and item.caption != existing.google_caption:
+                        existing.google_caption = item.caption
                         stats["updated"] += 1
                     else:
                         stats["unchanged"] += 1
@@ -540,14 +558,13 @@ class CacheManager:
                                 logger.debug(f"Failed to extract metadata: {e}")
 
                         # Create cache entry
-                        # For now, use embedded caption; Google Photos caption will be fetched later
-                        # and applied based on caption_precedence config
+                        # Store embedded caption separately; Google caption fetched later
                         cached = CachedMedia(
                             media_id=media_id,
                             url=item.url,
                             local_path=local_path,
                             media_type=item.media_type,
-                            caption=embedded_caption,  # Start with embedded, may be updated
+                            embedded_caption=embedded_caption,
                             exif_date=exif_date,
                             album_source=item.album_name or "",
                             download_date=now,
@@ -570,8 +587,6 @@ class CacheManager:
 
         # Fetch captions from Google Photos for new photos or all photos if requested
         urls_needing_captions: Set[str] = set()
-        # Track embedded captions so we can apply precedence later
-        embedded_captions: Dict[str, Optional[str]] = {}
 
         if force_refetch_captions:
             # Force re-fetch ALL photos (use when extraction logic changed)
@@ -598,17 +613,8 @@ class CacheManager:
         else:
             # Only fetch captions for newly downloaded photos
             urls_needing_captions = new_photo_urls
-            # Track embedded captions for new photos
-            with self._lock:
-                for url in new_photo_urls:
-                    media_id = self._get_media_id(url)
-                    if media_id in self._media:
-                        embedded_captions[url] = self._media[media_id].caption
             if urls_needing_captions:
                 logger.info(f"Fetching captions for {len(urls_needing_captions)} new photos...")
-
-        # Get caption precedence setting
-        caption_precedence = getattr(self.config.sync, 'caption_precedence', 'google_photos')
 
         if urls_needing_captions and albums_scraped_successfully > 0:
             self._sync_progress.stage = "fetching_captions"
@@ -618,26 +624,20 @@ class CacheManager:
             # Counter for batched saves
             captions_since_save = [0]  # Use list to allow modification in nested function
 
-            # Callback to save each caption and location immediately
+            # Callback to save Google caption and location
+            # Note: Caption precedence is now applied at display time, not sync time
             def on_caption_found(url: str, google_caption: Optional[str], google_location: Optional[str] = None) -> None:
                 media_id = self._get_media_id(url)
                 with self._lock:
                     if media_id not in self._media:
                         return
 
-                    embedded_caption = embedded_captions.get(url)
-
-                    # Apply caption based on precedence setting
-                    if caption_precedence == "google_photos":
-                        final_caption = google_caption or embedded_caption
-                    else:
-                        final_caption = embedded_caption or google_caption
-
-                    if final_caption and final_caption != self._media[media_id].caption:
-                        self._media[media_id].caption = final_caption
+                    # Store Google caption separately (not merged with embedded)
+                    if google_caption and google_caption != self._media[media_id].google_caption:
+                        self._media[media_id].google_caption = google_caption
                         stats["captions_updated"] += 1
 
-                    # Store Google location separately (always update if available)
+                    # Store Google location separately
                     if google_location and google_location != self._media[media_id].google_location:
                         self._media[media_id].google_location = google_location
 
@@ -1006,8 +1006,8 @@ class CacheManager:
             for cached in self._media.values():
                 if cached.deleted or cached.media_type != "photo":
                     continue
-                # Skip if already has location or caption
-                if cached.location or cached.caption:
+                # Skip if already has location or any caption
+                if cached.location or cached.google_caption or cached.embedded_caption:
                     continue
                 if os.path.exists(cached.local_path):
                     photos_to_process.append(cached)
@@ -1046,4 +1046,64 @@ class CacheManager:
                 self._save_metadata()
 
         logger.info(f"Extracted locations for {updated} photos")
+        return updated
+
+    def extract_embedded_captions(
+        self,
+        progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> int:
+        """
+        Re-extract embedded EXIF/IPTC captions from local photo files.
+
+        Use this to populate embedded_caption for photos that were cached
+        before the separate embedded_caption field was added.
+
+        Args:
+            progress_callback: Optional callback(current, total) for progress.
+
+        Returns:
+            Number of photos updated with embedded captions.
+        """
+        updated = 0
+        photos_to_process = []
+
+        with self._lock:
+            for cached in self._media.values():
+                if cached.deleted or cached.media_type != "photo":
+                    continue
+                # Process photos that don't have embedded_caption yet
+                if cached.embedded_caption:
+                    continue
+                if os.path.exists(cached.local_path):
+                    photos_to_process.append(cached)
+
+        total = len(photos_to_process)
+        logger.info(f"Extracting embedded captions for {total} photos...")
+
+        for i, cached in enumerate(photos_to_process):
+            if progress_callback:
+                progress_callback(i + 1, total)
+
+            try:
+                metadata = self._metadata_extractor.extract(cached.local_path)
+                if metadata.caption:
+                    with self._lock:
+                        cached.embedded_caption = metadata.caption
+                    updated += 1
+                    logger.debug(f"Embedded caption for {cached.media_id}: {metadata.caption[:50]}...")
+            except Exception as e:
+                logger.debug(f"Failed to extract embedded caption for {cached.media_id}: {e}")
+
+            # Save periodically
+            if updated > 0 and updated % 50 == 0:
+                with self._lock:
+                    self._save_metadata()
+                logger.info(f"Extracted {updated} embedded captions so far...")
+
+        # Final save
+        if updated > 0:
+            with self._lock:
+                self._save_metadata()
+
+        logger.info(f"Extracted embedded captions for {updated} photos")
         return updated

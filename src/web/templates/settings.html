@@ -119,6 +119,7 @@
         <!-- Display Tab -->
         <section id="display" class="tab-content">
             <h2>Display Settings</h2>
+            <p class="hint">Changes take effect immediately after saving.</p>
 
             <div class="form-group">
                 <label for="photo-duration">Photo Duration (seconds)</label>
@@ -162,16 +163,19 @@
                 </label>
             </div>
 
+            <div class="form-group" id="overlay-font-size-group" style="display: flex; align-items: center; gap: 12px;">
+                <label for="overlay-font-size" style="margin: 0;">Overlay Text Size (pixels)</label>
+                <input type="number" id="overlay-font-size" min="12" max="200"
+                       value="{{ config.overlay.font_size }}" style="width: 100px;">
+            </div>
+
             <button id="btn-save-display" class="btn btn-primary">Save Display Settings</button>
         </section>
 
         <!-- Schedule Tab -->
         <section id="schedule" class="tab-content">
             <h2>Schedule Settings</h2>
-
-            <p class="help-text" style="margin-bottom: 15px;">
-                Use Slideshow Control to enable or disable the schedule.
-            </p>
+            <p class="hint">Changes take effect immediately after saving. However Slideshow Control must be used to enable/disable the schedule.</p>
 
             <h3>Weekday Schedule (Mon-Fri)</h3>
             <div class="time-range">
@@ -319,15 +323,12 @@
                 if (status.schedule) {
                     const state = status.schedule.state;
                     const isRunning = (state === 'active' || state === 'force_on');
-                    const isStopped = (state === 'force_off');
 
-                    // Start button: "Start" when stopped, "Restart" when running
+                    // Show Start when stopped/off-hours, Show Stop when running
                     const startBtn = document.getElementById('btn-start');
-                    startBtn.textContent = isRunning ? 'Restart' : 'Start';
-
-                    // Stop button: disabled when already stopped
                     const stopBtn = document.getElementById('btn-stop');
-                    stopBtn.disabled = isStopped;
+                    startBtn.style.display = isRunning ? 'none' : '';
+                    stopBtn.style.display = isRunning ? '' : 'none';
                 }
 
                 // Sync schedule enabled checkbox
@@ -706,6 +707,143 @@
                     btn.disabled = false;
                     btn.textContent = 'Clear Cache';
                 }
+            }
+        });
+
+        // Track display settings changes
+        const displayInputs = ['photo-duration', 'transition-type', 'display-order', 'ken-burns-enabled', 'overlay-enabled', 'overlay-font-size'];
+        const displayOriginalValues = {};
+
+        function captureDisplayOriginalValues() {
+            displayInputs.forEach(id => {
+                const el = document.getElementById(id);
+                displayOriginalValues[id] = el.type === 'checkbox' ? el.checked : el.value;
+            });
+        }
+
+        function checkDisplayChanges() {
+            const btn = document.getElementById('btn-save-display');
+            let hasChanges = false;
+            displayInputs.forEach(id => {
+                const el = document.getElementById(id);
+                const currentValue = el.type === 'checkbox' ? el.checked : el.value;
+                if (currentValue !== displayOriginalValues[id]) {
+                    hasChanges = true;
+                }
+            });
+            btn.disabled = !hasChanges;
+        }
+
+        // Initialize original values and set up change listeners
+        captureDisplayOriginalValues();
+        document.getElementById('btn-save-display').disabled = true;
+        displayInputs.forEach(id => {
+            const el = document.getElementById(id);
+            el.addEventListener('change', checkDisplayChanges);
+            if (el.type === 'number' || el.type === 'text') {
+                el.addEventListener('input', checkDisplayChanges);
+            }
+        });
+
+        // Save display settings
+        document.getElementById('btn-save-display').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-save-display');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                const data = {
+                    photo_duration_seconds: document.getElementById('photo-duration').value,
+                    transition_type: document.getElementById('transition-type').value,
+                    order: document.getElementById('display-order').value,
+                    ken_burns_enabled: document.getElementById('ken-burns-enabled').checked,
+                    overlay_enabled: document.getElementById('overlay-enabled').checked,
+                    overlay_font_size: document.getElementById('overlay-font-size').value
+                };
+
+                const result = await apiCall('/api/display', 'POST', data);
+                if (result.success) {
+                    captureDisplayOriginalValues();  // Reset tracking
+                    btn.textContent = 'Saved!';
+                    setTimeout(() => {
+                        btn.textContent = 'Save Display Settings';
+                        // Button stays disabled since no changes now
+                    }, 1500);
+                } else {
+                    alert('Error: ' + (result.error || 'Unknown error'));
+                    btn.textContent = 'Save Display Settings';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                alert('Error saving settings: ' + e);
+                btn.textContent = 'Save Display Settings';
+                btn.disabled = false;
+            }
+        });
+
+        // Track schedule settings changes
+        const scheduleInputs = ['weekday-start', 'weekday-end', 'weekend-start', 'weekend-end', 'off-hours-mode'];
+        const scheduleOriginalValues = {};
+
+        function captureScheduleOriginalValues() {
+            scheduleInputs.forEach(id => {
+                const el = document.getElementById(id);
+                scheduleOriginalValues[id] = el.value;
+            });
+        }
+
+        function checkScheduleChanges() {
+            const btn = document.getElementById('btn-save-schedule');
+            let hasChanges = false;
+            scheduleInputs.forEach(id => {
+                const el = document.getElementById(id);
+                if (el.value !== scheduleOriginalValues[id]) {
+                    hasChanges = true;
+                }
+            });
+            btn.disabled = !hasChanges;
+        }
+
+        // Initialize schedule tracking
+        captureScheduleOriginalValues();
+        document.getElementById('btn-save-schedule').disabled = true;
+        scheduleInputs.forEach(id => {
+            const el = document.getElementById(id);
+            el.addEventListener('change', checkScheduleChanges);
+            el.addEventListener('input', checkScheduleChanges);
+        });
+
+        // Save schedule settings
+        document.getElementById('btn-save-schedule').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-save-schedule');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                const data = {
+                    weekday_start: document.getElementById('weekday-start').value,
+                    weekday_end: document.getElementById('weekday-end').value,
+                    weekend_start: document.getElementById('weekend-start').value,
+                    weekend_end: document.getElementById('weekend-end').value,
+                    off_hours_mode: document.getElementById('off-hours-mode').value
+                };
+
+                const result = await apiCall('/api/schedule', 'POST', data);
+                if (result.success) {
+                    captureScheduleOriginalValues();
+                    btn.textContent = 'Saved!';
+                    setTimeout(() => {
+                        btn.textContent = 'Save Schedule';
+                    }, 1500);
+                } else {
+                    alert('Error: ' + (result.error || 'Unknown error'));
+                    btn.textContent = 'Save Schedule';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                alert('Error saving schedule: ' + e);
+                btn.textContent = 'Save Schedule';
+                btn.disabled = false;
             }
         });
 
