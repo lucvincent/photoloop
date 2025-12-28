@@ -197,6 +197,7 @@ class Display:
         """Reload fonts when config changes (e.g., font size updated)."""
         logger.info(f"Reloading fonts (font_size={self.config.overlay.font_size})")
         self._init_fonts()
+        self._needs_redraw = True  # Force redraw to show new font size
 
     def _pil_to_texture(self, pil_image: Image.Image) -> sdl2.Texture:
         """Convert PIL Image to SDL2 Texture (GPU-resident)."""
