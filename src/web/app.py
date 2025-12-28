@@ -65,6 +65,16 @@ def create_app(
             config=config_to_dict(app.photoloop_config)
         )
 
+    @app.route('/sw.js')
+    def service_worker():
+        """Serve service worker from root for proper scope."""
+        from flask import send_from_directory
+        return send_from_directory(
+            app.static_folder,
+            'sw.js',
+            mimetype='application/javascript'
+        )
+
     @app.route('/api/status')
     def api_status():
         """Get current status."""
