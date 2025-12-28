@@ -164,6 +164,11 @@ class Display:
         self._skip_requested = False
         self._previous_requested = False
 
+        # Visual feedback state
+        self._feedback_type = None  # 'paused', 'resuming', 'next', 'previous'
+        self._feedback_start_time = 0
+        self._feedback_duration = 0  # 0 = persistent (for paused)
+
     def _init_fonts(self) -> None:
         """Initialize fonts for overlay and clock."""
         font_names = [
@@ -176,6 +181,8 @@ class Display:
 
         self._overlay_font = None
         self._clock_font = None
+        self._feedback_font = None
+        self._feedback_icon_font = None
 
         for font_name in font_names:
             try:
@@ -184,6 +191,8 @@ class Display:
                     self.config.overlay.font_size
                 )
                 self._clock_font = pygame.font.SysFont(font_name, 120)
+                self._feedback_font = pygame.font.SysFont(font_name, 48)
+                self._feedback_icon_font = pygame.font.SysFont(font_name, 96)
                 break
             except Exception:
                 continue
@@ -192,6 +201,10 @@ class Display:
             self._overlay_font = pygame.font.Font(None, self.config.overlay.font_size)
         if self._clock_font is None:
             self._clock_font = pygame.font.Font(None, 120)
+        if self._feedback_font is None:
+            self._feedback_font = pygame.font.Font(None, 48)
+        if self._feedback_icon_font is None:
+            self._feedback_icon_font = pygame.font.Font(None, 96)
 
     def reload_fonts(self) -> None:
         """Reload fonts when config changes (e.g., font size updated)."""
@@ -360,8 +373,15 @@ class Display:
         if "quit" in events:
             return False
 
+        # Check if feedback animation is active (needs continuous rendering for fade)
+        feedback_animating = (
+            self._feedback_type is not None and
+            self._feedback_duration > 0
+        )
+
         needs_animation = (
             self._transitioning or
+            feedback_animating or
             (self.mode == DisplayMode.SLIDESHOW and
              self.config.ken_burns.enabled and
              self._source_texture is not None)
@@ -440,6 +460,12 @@ class Display:
         if self.config.overlay.enabled and self._current_media:
             self._render_overlay()
 
+        # Render feedback overlay (paused, next/prev arrows, etc.)
+        self._render_feedback()
+
+        # Render persistent paused indicator (bottom-right, after main feedback fades)
+        self._render_paused_indicator()
+
     def _render_transition(self) -> None:
         """Render transition between photos."""
         if self._current_texture is None or self._next_texture is None:
@@ -459,6 +485,7 @@ class Display:
             self._renderer.draw_color = self._bg_color
             self._renderer.clear()
             self._current_texture.draw(dstrect=(0, 0, self.screen_width, self.screen_height))
+            self._render_feedback()  # Show any active feedback overlay
             return
 
         self._renderer.draw_color = self._bg_color
@@ -476,6 +503,9 @@ class Display:
             self._render_slide_transition(progress, (0, 1))
         else:
             self._next_texture.draw(dstrect=(0, 0, self.screen_width, self.screen_height))
+
+        # Render feedback overlay on top of transition
+        self._render_feedback()
 
     def _render_fade_transition(self, progress: float) -> None:
         """Render a fade transition using texture alpha."""
@@ -845,13 +875,15 @@ class Display:
         """Request skip to next photo."""
         self._skip_requested = True
         self._previous_requested = False
-        logger.debug("Skip to next requested")
+        self._show_feedback('next', duration=1.5)  # Longer to survive photo loading
+        logger.info("Skip to next requested, feedback shown")
 
     def skip_to_previous(self) -> None:
         """Request skip to previous photo."""
         self._previous_requested = True
-        self._skip_requested = False
-        logger.debug("Skip to previous requested")
+        self._skip_requested = True  # Also set skip to trigger immediate transition
+        self._show_feedback('previous', duration=1.5)  # Longer to survive photo loading
+        logger.info("Skip to previous requested, feedback shown")
 
     def is_previous_requested(self) -> bool:
         """Check and clear previous request flag."""
@@ -863,11 +895,13 @@ class Display:
     def pause(self) -> None:
         """Pause the slideshow on the current photo."""
         self._paused = True
+        self._show_feedback('paused', duration=0.5)  # Brief centered notification
         logger.info("Slideshow paused")
 
     def resume(self) -> None:
         """Resume the slideshow auto-advance."""
         self._paused = False
+        self._show_feedback('resuming', duration=1.5)
         # Reset the timer so we get a full duration on this photo
         self._kb_start_time = time.time()
         logger.info("Slideshow resumed")
@@ -883,6 +917,199 @@ class Display:
     def is_paused(self) -> bool:
         """Check if slideshow is paused."""
         return self._paused
+
+    def _show_feedback(self, feedback_type: str, duration: float = 1.0) -> None:
+        """Show visual feedback overlay.
+
+        Args:
+            feedback_type: 'paused', 'resuming', 'next', or 'previous'
+            duration: How long to show (0 = persistent until cleared)
+        """
+        self._feedback_type = feedback_type
+        self._feedback_start_time = time.time()
+        self._feedback_duration = duration
+        self._needs_redraw = True
+
+        # Force immediate render to show feedback without delay
+        if self.mode == DisplayMode.SLIDESHOW and self._current_texture:
+            self._render_slideshow()
+            self._renderer.present()
+
+    def _render_feedback(self) -> None:
+        """Render visual feedback overlay for user actions."""
+        if self._feedback_type is None:
+            return
+
+        logger.debug(f"Rendering feedback: type={self._feedback_type}, duration={self._feedback_duration}")
+
+        # Check if temporary feedback has expired
+        if self._feedback_duration > 0:
+            elapsed = time.time() - self._feedback_start_time
+            if elapsed >= self._feedback_duration:
+                self._feedback_type = None
+                # Trigger redraw to show persistent indicator if paused
+                if self._paused:
+                    self._needs_redraw = True
+                return
+            # Calculate fade-out alpha for last 0.3 seconds
+            fade_start = self._feedback_duration - 0.3
+            if elapsed > fade_start:
+                alpha = int(255 * (1 - (elapsed - fade_start) / 0.3))
+            else:
+                alpha = 255
+        else:
+            alpha = 255  # Persistent (paused state)
+
+        # Define feedback content - use unicode symbols
+        if self._feedback_type == 'paused':
+            icon = "\u275A\u275A"  # ❚❚ (heavy vertical bars)
+            text = "PAUSED"
+        elif self._feedback_type == 'resuming':
+            icon = "\u25B6"  # ▶ (play triangle)
+            text = "RESUMING"
+        elif self._feedback_type == 'next':
+            icon = "\u25B6"  # ▶ (right arrow)
+            text = None
+        elif self._feedback_type == 'previous':
+            icon = "\u25C0"  # ◀ (left arrow)
+            text = None
+        else:
+            return
+
+        # Render icon with large font
+        try:
+            icon_surface = self._feedback_icon_font.render(icon, True, (255, 255, 255))
+        except Exception:
+            # Fallback to ASCII if unicode fails
+            fallback = {"paused": "||", "resuming": ">", "next": ">>", "previous": "<<"}
+            icon_surface = self._feedback_icon_font.render(
+                fallback.get(self._feedback_type, ">"),
+                True, (255, 255, 255)
+            )
+
+        # Make icons larger to fill more of the container
+        # Pause icon (double bars) needs to be slightly smaller to match arrow visual weight
+        if self._feedback_type == 'paused':
+            target_icon_height = 120  # Smaller for pause to match arrow visual weight
+        else:
+            target_icon_height = 150  # Arrows
+
+        raw_w, raw_h = icon_surface.get_size()
+        if raw_h > 0:
+            scale = target_icon_height / raw_h
+            new_w = int(raw_w * scale)
+            new_h = target_icon_height
+            icon_surface = pygame.transform.smoothscale(icon_surface, (new_w, new_h))
+
+        icon_w, icon_h = icon_surface.get_size()
+
+        # Fixed container size for all icons (square)
+        container_size = 180  # Fixed size for consistent appearance
+
+        # Create background surface with rounded corners (fixed size for all)
+        bg_surface = pygame.Surface((container_size, container_size), pygame.SRCALPHA)
+        bg_color = (0, 0, 0, 120)  # Lighter background
+
+        # Draw rounded rectangle
+        radius = 20
+        pygame.draw.rect(bg_surface, bg_color, (radius, 0, container_size - 2*radius, container_size))
+        pygame.draw.rect(bg_surface, bg_color, (0, radius, container_size, container_size - 2*radius))
+        pygame.draw.circle(bg_surface, bg_color, (radius, radius), radius)
+        pygame.draw.circle(bg_surface, bg_color, (container_size - radius, radius), radius)
+        pygame.draw.circle(bg_surface, bg_color, (radius, container_size - radius), radius)
+        pygame.draw.circle(bg_surface, bg_color, (container_size - radius, container_size - radius), radius)
+
+        # Get the actual bounding box of the icon (trim transparent edges)
+        # This ensures perfect visual centering regardless of font metrics
+        icon_rect = icon_surface.get_bounding_rect()
+
+        # Calculate position to center the visible part of the icon
+        icon_x = (container_size - icon_rect.width) // 2 - icon_rect.x
+        icon_y = (container_size - icon_rect.height) // 2 - icon_rect.y
+        bg_surface.blit(icon_surface, (icon_x, icon_y))
+
+        # Position container on screen (center)
+        container_x = (self.screen_width - container_size) // 2
+        container_y = (self.screen_height - container_size) // 2
+
+        logger.debug(f"Feedback overlay: type={self._feedback_type}, container={container_size}x{container_size}, pos=({container_x},{container_y}), alpha={alpha}")
+
+        # Convert to texture and draw with alpha
+        feedback_texture = self._surface_to_texture(bg_surface)
+        feedback_texture.alpha = alpha  # Set texture alpha for fade effect
+        feedback_texture.draw(dstrect=(container_x, container_y, container_size, container_size))
+
+        # Render text below container if present (no background)
+        if text:
+            # Use 54pt font for the text
+            text_font = pygame.font.SysFont(None, 54)
+            text_surface = text_font.render(text, True, (255, 255, 255))
+            text_surface.set_alpha(alpha)
+            text_w, text_h = text_surface.get_size()
+            text_x = (self.screen_width - text_w) // 2
+            text_y = container_y + container_size + 15  # 15px gap below container
+
+            # Convert text to texture and draw
+            text_texture = self._surface_to_texture(text_surface)
+            text_texture.alpha = alpha
+            text_texture.draw(dstrect=(text_x, text_y, text_w, text_h))
+
+    def _render_paused_indicator(self) -> None:
+        """Render subtle persistent 'Paused' indicator in bottom-right corner."""
+        if not self._paused:
+            return
+
+        # Don't show if the main feedback overlay is still visible
+        if self._feedback_type is not None:
+            if self._feedback_duration == 0:
+                logger.debug("Paused indicator: skipped (persistent feedback active)")
+                return  # Persistent feedback active
+            elapsed = time.time() - self._feedback_start_time
+            if elapsed < self._feedback_duration:
+                logger.debug(f"Paused indicator: skipped (feedback active, {elapsed:.1f}s elapsed)")
+                return  # Temporary feedback still showing
+
+        logger.debug("Rendering paused indicator")
+
+        # Render "PAUSED" text in amber/orange color (30% smaller than feedback font)
+        # Amber color indicates "waiting/hold" state
+        text = "PAUSED"
+        amber_color = (255, 191, 0)  # Amber/gold color
+        small_font = pygame.font.SysFont(None, 34)  # 30% smaller than 48pt
+        text_surface = small_font.render(text, True, amber_color)
+        text_w, text_h = text_surface.get_size()
+
+        # Small padding
+        padding = 10
+        bg_w = text_w + padding * 2
+        bg_h = text_h + padding * 2
+
+        # Semi-transparent dark background with slight amber tint
+        bg_surface = pygame.Surface((bg_w, bg_h), pygame.SRCALPHA)
+        bg_color = (40, 30, 0, 140)  # Dark with slight amber tint
+
+        # Simple rounded rectangle
+        radius = min(8, bg_h // 4)
+        pygame.draw.rect(bg_surface, bg_color, (radius, 0, bg_w - 2*radius, bg_h))
+        pygame.draw.rect(bg_surface, bg_color, (0, radius, bg_w, bg_h - 2*radius))
+        pygame.draw.circle(bg_surface, bg_color, (radius, radius), radius)
+        pygame.draw.circle(bg_surface, bg_color, (bg_w - radius, radius), radius)
+        pygame.draw.circle(bg_surface, bg_color, (radius, bg_h - radius), radius)
+        pygame.draw.circle(bg_surface, bg_color, (bg_w - radius, bg_h - radius), radius)
+
+        # Blit text centered
+        text_x = padding
+        text_y = padding
+        bg_surface.blit(text_surface, (text_x, text_y))
+
+        # Position in bottom-right corner with margin
+        margin = 20
+        x = self.screen_width - bg_w - margin
+        y = self.screen_height - bg_h - margin
+
+        # Convert to texture and draw
+        indicator_texture = self._surface_to_texture(bg_surface)
+        indicator_texture.draw(dstrect=(x, y, bg_w, bg_h))
 
     def handle_events(self) -> list:
         """Process pygame events."""

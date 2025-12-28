@@ -7,6 +7,7 @@ Supports Fire TV Remote and similar Bluetooth remotes via evdev.
 import logging
 import select
 import threading
+import time
 from enum import Enum
 from typing import Callable, Optional
 
@@ -94,6 +95,9 @@ class RemoteInputHandler:
         """
         Start listening for remote input.
 
+        Starts a background thread that continuously looks for and connects
+        to compatible remotes, automatically reconnecting if disconnected.
+
         Returns:
             True if successfully started, False otherwise.
         """
@@ -101,21 +105,24 @@ class RemoteInputHandler:
             logger.warning("evdev not available - cannot start remote handler")
             return False
 
+        # Try to find remote initially
         device_path = self.find_remote()
-        if not device_path:
-            logger.info("No compatible remote found")
-            return False
+        if device_path:
+            try:
+                self._device = InputDevice(device_path)
+                logger.info(f"Remote input handler started for {self._device.name}")
+            except Exception as e:
+                logger.warning(f"Failed to open remote device: {e}")
+                self._device = None
+        else:
+            logger.info("No remote found initially - will keep looking")
 
-        try:
-            self._device = InputDevice(device_path)
-            self._running = True
-            self._thread = threading.Thread(target=self._input_loop, daemon=True)
-            self._thread.start()
-            logger.info(f"Remote input handler started for {self._device.name}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to start remote handler: {e}")
-            return False
+        # Start the input loop thread (will auto-reconnect)
+        self._running = True
+        self._thread = threading.Thread(target=self._input_loop, daemon=True)
+        self._thread.start()
+        logger.info("Remote input handler started (auto-reconnect enabled)")
+        return True
 
     def stop(self) -> None:
         """Stop listening for remote input."""
@@ -131,8 +138,16 @@ class RemoteInputHandler:
         logger.info("Remote input handler stopped")
 
     def _input_loop(self) -> None:
-        """Background thread that reads input events."""
-        while self._running and self._device:
+        """Background thread that reads input events with auto-reconnect."""
+        reconnect_delay = 5  # seconds between reconnection attempts
+
+        while self._running:
+            # Ensure we have a valid device
+            if self._device is None:
+                if not self._try_reconnect():
+                    time.sleep(reconnect_delay)
+                    continue
+
             try:
                 # Use select for non-blocking read with timeout
                 r, _, _ = select.select([self._device], [], [], 0.5)
@@ -147,12 +162,36 @@ class RemoteInputHandler:
                             self._handle_action(action)
 
             except OSError as e:
-                # Device disconnected
+                # Device disconnected - close and try to reconnect
                 logger.warning(f"Remote disconnected: {e}")
-                self._running = False
-                break
+                self._close_device()
+                # Will attempt reconnect on next loop iteration
+
             except Exception as e:
                 logger.error(f"Remote input error: {e}")
+
+    def _try_reconnect(self) -> bool:
+        """Attempt to find and connect to a remote device."""
+        device_path = self.find_remote()
+        if not device_path:
+            return False
+
+        try:
+            self._device = InputDevice(device_path)
+            logger.info(f"Remote reconnected: {self._device.name} at {device_path}")
+            return True
+        except Exception as e:
+            logger.debug(f"Failed to reconnect to remote: {e}")
+            return False
+
+    def _close_device(self) -> None:
+        """Safely close the current device."""
+        if self._device:
+            try:
+                self._device.close()
+            except Exception:
+                pass
+            self._device = None
 
     def _handle_action(self, action: RemoteAction) -> None:
         """Handle an action from the remote."""
