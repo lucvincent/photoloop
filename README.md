@@ -210,6 +210,48 @@ web:
   host: "0.0.0.0"  # Listen on all interfaces
 ```
 
+## Accessing the Web Dashboard
+
+### Local Network Discovery (mDNS)
+
+PhotoLoop registers itself for local network discovery using mDNS/Bonjour. Access the dashboard at:
+
+```
+http://<hostname>.local:8080
+```
+
+For example, if your Raspberry Pi's hostname is `photopi1`:
+```
+http://photopi1.local:8080
+```
+
+This works on:
+- macOS and iOS (built-in)
+- Windows 10/11 (built-in)
+- Linux (with avahi-daemon installed)
+- Android (varies by device/app)
+
+### Multiple PhotoLoop Instances
+
+If you have multiple PhotoLoop instances on your network (e.g., `photopi1`, `photopi2`), each is accessible by its hostname:
+
+```
+http://photopi1.local:8080
+http://photopi2.local:8080
+```
+
+Each instance also advertises itself as a service (e.g., "PhotoLoop (photopi1)") for apps that support Bonjour/mDNS service browsing.
+
+### Direct IP Access
+
+You can also access the dashboard using the device's IP address:
+
+```
+http://<ip-address>:8080
+```
+
+Find the IP with: `hostname -I` on the Pi.
+
 ## Directory Structure
 
 ```

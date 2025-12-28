@@ -69,7 +69,7 @@ if [[ ! $REPLY =~ ^[Yy]?$ ]]; then
 fi
 
 echo ""
-echo -e "${YELLOW}[1/7] Installing system dependencies...${NC}"
+echo -e "${YELLOW}[1/8] Installing system dependencies...${NC}"
 
 # Update package list
 apt-get update
@@ -159,7 +159,7 @@ fi
 echo -e "${GREEN}System dependencies installed.${NC}"
 
 echo ""
-echo -e "${YELLOW}[2/7] Creating directories...${NC}"
+echo -e "${YELLOW}[2/8] Creating directories...${NC}"
 
 # Create directories
 mkdir -p "$INSTALL_DIR"
@@ -174,7 +174,7 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$LOG_DIR"
 echo -e "${GREEN}Directories created.${NC}"
 
 echo ""
-echo -e "${YELLOW}[3/7] Copying application files...${NC}"
+echo -e "${YELLOW}[3/8] Copying application files...${NC}"
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -223,7 +223,7 @@ fi
 echo -e "${GREEN}Application files copied.${NC}"
 
 echo ""
-echo -e "${YELLOW}[4/7] Creating Python virtual environment...${NC}"
+echo -e "${YELLOW}[4/8] Creating Python virtual environment...${NC}"
 
 # Create virtual environment
 python3 -m venv "$INSTALL_DIR/venv"
@@ -242,7 +242,7 @@ deactivate
 echo -e "${GREEN}Python environment created.${NC}"
 
 echo ""
-echo -e "${YELLOW}[5/7] Installing configuration...${NC}"
+echo -e "${YELLOW}[5/8] Installing configuration...${NC}"
 
 # Copy default config if it doesn't exist
 if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
@@ -290,7 +290,7 @@ else
 fi
 
 echo ""
-echo -e "${YELLOW}[6/7] Installing systemd service...${NC}"
+echo -e "${YELLOW}[6/8] Installing systemd service...${NC}"
 
 # Copy service file
 cp "$SCRIPT_DIR/photoloop.service" /etc/systemd/system/photoloop.service
@@ -309,7 +309,29 @@ systemctl enable photoloop
 echo -e "${GREEN}Systemd service installed and enabled.${NC}"
 
 echo ""
-echo -e "${YELLOW}[7/7] Creating CLI commands...${NC}"
+echo -e "${YELLOW}[7/8] Setting up network discovery (mDNS)...${NC}"
+
+# Create avahi service file for local network discovery
+if [ -d /etc/avahi/services ]; then
+    cat > /etc/avahi/services/photoloop.service << 'EOF'
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">PhotoLoop (%h)</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>8080</port>
+    <txt-record>path=/</txt-record>
+  </service>
+</service-group>
+EOF
+    echo -e "${GREEN}mDNS service registered. Dashboard accessible at http://$(hostname).local:8080${NC}"
+else
+    echo -e "${YELLOW}avahi-daemon not found. Install it for .local network discovery.${NC}"
+fi
+
+echo ""
+echo -e "${YELLOW}[8/8] Creating CLI commands...${NC}"
 
 # Create CLI wrapper script
 cat > /usr/local/bin/photoloop << 'EOF'
@@ -353,7 +375,8 @@ echo "   sudo systemctl status photoloop"
 echo "   photoloop status"
 echo ""
 echo "5. Access web interface:"
-echo "   http://$(hostname -I | awk '{print $1}'):8080"
+echo "   http://$(hostname).local:8080"
+echo "   or http://$(hostname -I | awk '{print $1}'):8080"
 echo ""
 echo "Commands:"
 echo "  photoloop status    - Show current status"
