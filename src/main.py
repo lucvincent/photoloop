@@ -53,6 +53,7 @@ class PhotoLoop:
         self.cache_manager = None
         self.scheduler = None
         self.display = None
+        self.remote_handler = None
         self.web_thread = None
         self.sync_thread = None
 
@@ -149,6 +150,33 @@ class PhotoLoop:
         except Exception as e:
             logger.error(f"Failed to initialize display: {e}")
             return False
+
+    def _init_remote(self) -> None:
+        """Initialize the remote input handler (optional)."""
+        from .remote_input import RemoteInputHandler, RemoteAction
+
+        def handle_remote_action(action: RemoteAction):
+            """Map remote actions to control requests."""
+            action_map = {
+                RemoteAction.NEXT: 'next',
+                RemoteAction.PREVIOUS: 'prev',
+                RemoteAction.TOGGLE_PAUSE: 'toggle_pause',
+                RemoteAction.SELECT: 'toggle_pause',
+            }
+            control_action = action_map.get(action)
+            if control_action:
+                self._on_control_request(control_action)
+
+        try:
+            self.remote_handler = RemoteInputHandler(action_callback=handle_remote_action)
+            if self.remote_handler.start():
+                logger.info("Remote input handler started")
+            else:
+                logger.info("No remote detected (optional)")
+                self.remote_handler = None
+        except Exception as e:
+            logger.debug(f"Remote input not available: {e}")
+            self.remote_handler = None
 
     def _start_web_server(self) -> None:
         """Start the web server in a background thread."""
@@ -339,6 +367,9 @@ class PhotoLoop:
         if not self._init_display():
             return 1
 
+        # Initialize remote control (optional, won't fail if no remote)
+        self._init_remote()
+
         # Start background services
         self._start_web_server()
         self._start_sync_thread()
@@ -453,6 +484,12 @@ class PhotoLoop:
     def _cleanup(self) -> None:
         """Clean up resources."""
         logger.info("Cleaning up...")
+
+        if self.remote_handler:
+            try:
+                self.remote_handler.stop()
+            except Exception as e:
+                logger.error(f"Error cleaning up remote handler: {e}")
 
         if self.display:
             try:
