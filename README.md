@@ -11,7 +11,10 @@ A digital photo frame application for Raspberry Pi that displays photos from pub
 - **Schedule Control**: Automatically turns on/off based on time of day
 - **Display Power Control**: Powers off TV/monitor during off-hours (DDC/CI and HDMI-CEC)
 - **Web Interface**: Configure and control via browser
+- **Remote Control**: Support for Bluetooth remotes (Fire TV Remote)
+- **Metadata Overlay**: Display photo date, captions, and location
 - **Offline Support**: Full local caching for reliable playback
+- **Self-Updating**: Built-in update mechanism for easy upgrades
 
 ## Hardware Requirements
 
@@ -56,12 +59,26 @@ sudo bash install.sh
 ### CLI Commands
 
 ```bash
-photoloop status    # Show current status
-photoloop start     # Force slideshow on
-photoloop stop      # Force slideshow off
-photoloop resume    # Resume schedule
-photoloop sync      # Sync albums now
-photoloop reload    # Reload configuration
+# Status and control
+photoloop status              # Show current status
+photoloop start               # Force slideshow on
+photoloop stop                # Force slideshow off
+photoloop resume              # Resume normal schedule
+photoloop next                # Skip to next photo
+photoloop prev                # Go to previous photo
+
+# Album management
+photoloop sync                # Sync albums (download new photos)
+photoloop albums              # List configured albums
+photoloop add-album URL       # Add a new album
+photoloop photos              # List cached photos
+
+# Configuration
+photoloop reload              # Reload configuration
+
+# Updates
+photoloop update --check      # Check for available updates
+photoloop update              # Apply updates and restart
 ```
 
 ### Test Commands
@@ -151,6 +168,31 @@ schedule:
     end_time: "23:00"
 ```
 
+### Metadata Overlay
+
+```yaml
+overlay:
+  enabled: true
+  show_date: true
+  show_caption: true
+  date_format: "%B %d, %Y"      # e.g., "December 25, 2024"
+  font_size: 36                  # Font size in pixels
+  font_color: [255, 255, 255]    # White text
+  background_color: [0, 0, 0, 128]  # Semi-transparent black
+  position: "bottom_left"        # bottom_left, bottom_right, top_left, top_right
+  padding: 20
+  max_caption_length: 200        # Truncate long captions
+```
+
+### Remote Control
+
+PhotoLoop supports Bluetooth remotes like the Amazon Fire TV Remote:
+
+- **Left/Right**: Previous/Next photo
+- **Center/Select**: Toggle pause
+
+Remotes are auto-detected on startup. No configuration needed.
+
 ### Cache
 
 ```yaml
@@ -178,6 +220,31 @@ web:
   cache/                  # Cached photos
     metadata.json         # Photo metadata
 /var/log/photoloop/       # Logs
+```
+
+## Updating PhotoLoop
+
+### Using the Built-in Updater
+
+```bash
+# Check for available updates (safe, no changes made)
+photoloop update --check
+
+# Apply updates
+photoloop update
+```
+
+The update command will:
+1. Update Python packages in the virtual environment
+2. Pull latest code changes (if installed from git)
+3. Restart the PhotoLoop service
+
+### System Updates
+
+System packages (Chromium, SDL2, etc.) are not updated automatically. Run periodically:
+
+```bash
+sudo apt update && sudo apt upgrade
 ```
 
 ## Troubleshooting
@@ -237,6 +304,7 @@ src/
   scheduler.py       # Time-based scheduling
   config.py          # Configuration loading
   cli.py             # Command line interface
+  remote_input.py    # Bluetooth remote control (evdev)
   web/               # Flask web interface
 
 tests/
