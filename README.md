@@ -206,9 +206,11 @@ cache:
 ```yaml
 web:
   enabled: true
-  port: 8080
-  host: "0.0.0.0"  # Listen on all interfaces
+  port: 8080        # Dashboard port (default: 8080)
+  host: "0.0.0.0"   # Listen on all interfaces
 ```
+
+**Note:** If you change the port, also update `/etc/avahi/services/photoloop.service` to match, so network discovery advertises the correct port.
 
 ## Accessing the Web Dashboard
 

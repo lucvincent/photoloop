@@ -259,11 +259,19 @@ cache:
 # ------------------------------------------------------------
 # Web Interface - Remote configuration via browser
 # ------------------------------------------------------------
+# Access the dashboard at: http://<hostname>.local:<port>
+# Example: http://photopi1.local:8080
 web:
   enabled: true
-  port: 8080                       # Web interface port
+  port: 8080                       # Web interface port (default: 8080)
   host: "0.0.0.0"                  # "0.0.0.0" = accessible from network
                                    # "127.0.0.1" = localhost only
+
+  # NOTE: If you change the port above, also update the mDNS service file
+  # so network discovery advertises the correct port:
+  #   sudo nano /etc/avahi/services/photoloop.service
+  # Change <port>8080</port> to match your new port, then restart avahi:
+  #   sudo systemctl restart avahi-daemon
 
 # ============================================================
 # Quick Start Guide
