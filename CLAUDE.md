@@ -17,16 +17,19 @@ PhotoLoop is a Python application that:
 
 ```
 src/
-  album_scraper.py  - Selenium-based Google Photos album scraper
-  cache_manager.py  - Local photo cache management
-  display.py        - SDL2 slideshow renderer
-  face_detector.py  - YuNet face detection for smart cropping
+  album_scraper.py   - Selenium-based Google Photos album scraper
+  cache_manager.py   - Local photo cache management
+  display.py         - SDL2 slideshow renderer with transitions and Ken Burns
+  face_detector.py   - YuNet face detection for smart cropping
   image_processor.py - Image scaling, cropping, processing
-  main.py           - Application entry point
-  scheduler.py      - Time-based schedule (on/off hours)
-  config.py         - YAML config loading
-  cli.py            - Command line interface
-  web/              - Flask web interface
+  main.py            - Application entry point and orchestration
+  metadata.py        - Photo metadata extraction (EXIF, IPTC, Google captions)
+  scheduler.py       - Time-based schedule (on/off hours)
+  config.py          - YAML config loading and validation
+  cli.py             - Command line interface
+  remote_input.py    - Bluetooth remote control (Fire TV Remote via evdev)
+  video_player.py    - Video playback using ffpyplayer
+  web/               - Flask web interface (PWA-enabled dashboard)
 ```
 
 ## Key Technical Details
@@ -56,6 +59,23 @@ src/
   3. Falls back to black screen if neither available
 - When `off_hours_mode: "black"`, display powers off
 - When `off_hours_mode: "clock"`, display stays on showing time/date
+
+### Remote Control (remote_input.py)
+- Supports Bluetooth remotes via evdev (e.g., Fire TV Remote)
+- Auto-detects remotes on startup
+- Auto-reconnects if remote disconnects and reconnects
+- Visual feedback overlays for pause/resume/next/previous actions
+
+### Metadata Extraction (metadata.py)
+- Extracts EXIF date, GPS coordinates, and embedded captions
+- Fetches Google Photos captions via Selenium (optional, slower)
+- Caption precedence configurable: google_photos or embedded
+- Reverse geocoding for location names from GPS coordinates
+
+### Video Playback (video_player.py)
+- Uses ffpyplayer for hardware-accelerated video decode
+- Integrates with SDL2 display renderer
+- Respects slideshow transitions
 
 ## Commands
 
@@ -118,7 +138,42 @@ See `config.yaml` for all settings. Key paths:
 - Chrome memory usage accumulates during long scroll sessions
 
 ### Testing
+
+PhotoLoop has comprehensive tests in the `tests/` directory:
+
+```bash
+# Quick health checks (safe, non-disruptive)
+photoloop-test --quick
+
+# All health checks with verbose output
+photoloop-test --verbose
+
+# Run unit tests
+photoloop-test --unit
+
+# Or use pytest directly
+pytest tests/ -v
+
+# Run with coverage
+pytest tests/ -v --cov=src --cov-report=term-missing
+```
+
+**Test Files:**
+- `test_config.py` - Configuration loading/validation
+- `test_face_detector.py` - Face detection with YuNet
+- `test_image_processor.py` - Image scaling, cropping, smart crop
+- `test_scheduler.py` - Schedule evaluation and overrides
+- `test_cache_manager.py` - Cache management and playlist navigation
+- `test_web_api.py` - Web dashboard API endpoints
+- `test_display_control.py` - DDC/CI and HDMI-CEC power control
+- `test_health.py` - Live system health validation
+
+### Manual Testing
+
 ```bash
 # Test scraper
 python -c "from src.album_scraper import AlbumScraper; s = AlbumScraper(); print(s.scrape_album('YOUR_URL'))"
+
+# Test face detection on an image
+python -c "from src.face_detector import FaceDetector; fd = FaceDetector(); print(fd.detect('/path/to/photo.jpg'))"
 ```

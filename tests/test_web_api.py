@@ -52,7 +52,9 @@ class TestWebAppFixtures:
             MagicMock(
                 media_id="photo1",
                 media_type="photo",
-                caption="Test caption 1",
+                google_caption="Test caption 1",
+                embedded_caption=None,
+                google_location="San Francisco, CA",
                 exif_date="2024-06-15",
                 local_path="/var/lib/photoloop/cache/photo1.jpg",
                 album_source="Album 1"
@@ -60,7 +62,9 @@ class TestWebAppFixtures:
             MagicMock(
                 media_id="photo2",
                 media_type="photo",
-                caption=None,
+                google_caption=None,
+                embedded_caption="Embedded caption",
+                google_location=None,
                 exif_date="2024-07-20",
                 local_path="/var/lib/photoloop/cache/photo2.jpg",
                 album_source="Album 1"
@@ -121,9 +125,10 @@ class TestWebAppFixtures:
         def on_config_change():
             callbacks["config_changed"] = True
 
-        def on_sync_request(update_all_captions=False):
+        def on_sync_request(update_all_captions=False, force_refetch_captions=False):
             callbacks["sync_requested"] = True
             callbacks["sync_update_all_captions"] = update_all_captions
+            callbacks["sync_force_refetch_captions"] = force_refetch_captions
 
         def on_control_request(action):
             callbacks["control_action"] = action
@@ -470,9 +475,11 @@ class TestPhotosEndpoints(TestWebAppFixtures):
         data = json.loads(response.data)
         assert len(data) == 2
         assert data[0]["id"] == "photo1"
-        assert data[0]["caption"] == "Test caption 1"
+        assert data[0]["google_caption"] == "Test caption 1"
+        assert data[0]["google_location"] == "San Francisco, CA"
         assert data[1]["id"] == "photo2"
-        assert data[1]["caption"] is None
+        assert data[1]["google_caption"] is None
+        assert data[1]["embedded_caption"] == "Embedded caption"
 
     def test_get_photos_no_cache_manager(self, mock_config, mock_scheduler, mock_display):
         """Test GET /api/photos with no cache manager returns empty list."""

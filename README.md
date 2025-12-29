@@ -10,11 +10,13 @@ A digital photo frame application for Raspberry Pi that displays photos from pub
 - **Ken Burns Effect**: Subtle zoom and pan animations for a dynamic display
 - **Schedule Control**: Automatically turns on/off based on time of day
 - **Display Power Control**: Powers off TV/monitor during off-hours (DDC/CI and HDMI-CEC)
-- **Web Interface**: Configure and control via browser
-- **Remote Control**: Support for Bluetooth remotes (Fire TV Remote)
+- **Web Interface**: Configure and control via browser (installable as PWA on mobile)
+- **Remote Control**: Support for Bluetooth remotes (Fire TV Remote) with visual feedback
 - **Metadata Overlay**: Display photo date, captions, and location
+- **Video Support**: Play videos from your Google Photos albums
 - **Offline Support**: Full local caching for reliable playback
 - **Self-Updating**: Built-in update mechanism for easy upgrades
+- **Network Discovery**: mDNS/Bonjour for easy dashboard access via hostname.local
 
 ## Hardware Requirements
 
@@ -28,7 +30,7 @@ A digital photo frame application for Raspberry Pi that displays photos from pub
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/photoloop.git
+git clone https://github.com/lucvincent/photoloop.git
 cd photoloop
 
 # Run the installer
@@ -254,6 +256,22 @@ http://<ip-address>:8080
 
 Find the IP with: `hostname -I` on the Pi.
 
+### Installing as a Mobile App (PWA)
+
+The dashboard can be installed as a Progressive Web App on your phone for quick access:
+
+**Android (Chrome):**
+1. Open the dashboard URL in Chrome
+2. Tap the menu (⋮) → "Add to Home screen" or "Install app"
+3. Tap "Install"
+
+**iOS (Safari):**
+1. Open the dashboard URL in Safari
+2. Tap the Share button → "Add to Home Screen"
+3. Tap "Add"
+
+Once installed, the dashboard opens in standalone mode (no browser chrome) and feels like a native app.
+
 ## Directory Structure
 
 ```
@@ -345,36 +363,95 @@ src/
   face_detector.py   # YuNet face detection
   image_processor.py # Image scaling and cropping
   main.py            # Application entry point
+  metadata.py        # Photo metadata extraction (EXIF, IPTC, captions)
   scheduler.py       # Time-based scheduling
   config.py          # Configuration loading
   cli.py             # Command line interface
   remote_input.py    # Bluetooth remote control (evdev)
-  web/               # Flask web interface
+  video_player.py    # Video playback (ffpyplayer)
+  web/               # Flask web interface (PWA-enabled)
 
 tests/
-  conftest.py        # Pytest fixtures
-  test_config.py     # Configuration tests
-  test_face_detector.py
-  test_image_processor.py
-  test_health.py     # System health checks
+  conftest.py             # Pytest fixtures and test utilities
+  test_cache_manager.py   # Cache and playlist tests
+  test_config.py          # Configuration loading tests
+  test_display_control.py # DDC/CI and HDMI-CEC power control tests
+  test_face_detector.py   # Face detection tests
+  test_health.py          # System health checks
+  test_image_processor.py # Image processing tests
+  test_scheduler.py       # Schedule evaluation tests
+  test_web_api.py         # Web dashboard API tests
 
 scripts/
   health_check.py    # Standalone health checker
   config_sync.py     # Config documentation validator
+  photoloop-test     # Unified test runner CLI
 ```
 
 ### Running Tests
 
+PhotoLoop has two ways to run tests:
+
+#### Using photoloop-test (Recommended)
+
+The `photoloop-test` command provides a unified interface for all testing:
+
 ```bash
-# Unit tests (use temp directories, safe to run)
-pytest tests/test_config.py tests/test_face_detector.py tests/test_image_processor.py -v
+# Run all health checks (safe, non-disruptive)
+photoloop-test
+
+# Quick health checks only
+photoloop-test --quick
+
+# Verbose output with detailed results
+photoloop-test --verbose
+
+# JSON output for automation/scripting
+photoloop-test --json
+
+# Run unit tests (may briefly disrupt live system)
+photoloop-test --unit
+
+# Run specific test file
+photoloop-test --unit -k test_config
+```
+
+#### Using pytest directly
+
+For development, you can run pytest directly:
+
+```bash
+# All unit tests (use temp directories, safe to run anytime)
+pytest tests/test_config.py tests/test_face_detector.py tests/test_image_processor.py tests/test_scheduler.py tests/test_cache_manager.py -v
+
+# Web API tests (uses test fixtures, safe to run)
+pytest tests/test_web_api.py -v
+
+# Display control tests (checks DDC/CI and HDMI-CEC)
+pytest tests/test_display_control.py -v
 
 # Health checks against live system (read-only, non-disruptive)
 pytest tests/test_health.py -v
 
 # All tests
 pytest tests/ -v
+
+# Run with coverage report
+pytest tests/ -v --cov=src --cov-report=term-missing
 ```
+
+#### Test Categories
+
+| Test File | Type | Safe to Run | Description |
+|-----------|------|-------------|-------------|
+| `test_config.py` | Unit | Yes | Configuration loading and validation |
+| `test_face_detector.py` | Unit | Yes | Face detection with YuNet model |
+| `test_image_processor.py` | Unit | Yes | Image scaling, cropping, smart crop |
+| `test_scheduler.py` | Unit | Yes | Schedule evaluation and overrides |
+| `test_cache_manager.py` | Unit | Yes | Cache management and playlist |
+| `test_web_api.py` | Unit | Yes | Web dashboard API endpoints |
+| `test_display_control.py` | Integration | Yes | DDC/CI and HDMI-CEC power control |
+| `test_health.py` | System | Yes | Live system health validation |
 
 ### Running from Source
 
