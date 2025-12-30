@@ -151,12 +151,14 @@ def create_app(
     @app.route('/api/albums', methods=['GET'])
     def api_get_albums():
         """Get configured albums and local directories with photo counts."""
-        # Count photos per album
+        # Count photos per album and get sync times
         photo_counts = {}
+        sync_times = {}
         if app.cache_manager:
             for media in app.cache_manager.get_all_media():
                 src = media.album_source or ""
                 photo_counts[src] = photo_counts.get(src, 0) + 1
+            sync_times = app.cache_manager.get_album_sync_times()
 
         albums = []
         for a in app.photoloop_config.albums:
@@ -167,7 +169,8 @@ def create_app(
                 "path": a.path,
                 "name": a.name,
                 "enabled": a.enabled,
-                "photo_count": photo_counts.get(album_name, 0)
+                "photo_count": photo_counts.get(album_name, 0),
+                "last_synced": sync_times.get(album_name)
             })
         return jsonify(albums)
 

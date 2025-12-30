@@ -182,6 +182,9 @@ class CacheManager:
         # In-memory cache of metadata
         self._media: Dict[str, CachedMedia] = {}
 
+        # Per-album sync timestamps (album_name -> ISO datetime)
+        self._album_sync_times: Dict[str, str] = {}
+
         # Sync progress tracking
         self._sync_progress = SyncProgress()
 
@@ -272,6 +275,9 @@ class CacheManager:
                         for k, v in data.get("media", {}).items()
                     }
 
+                    # Load per-album sync timestamps
+                    self._album_sync_times = data.get("album_sync_times", {})
+
                     # If face detection settings changed, clear cached_faces to force re-detection
                     if face_detection_changed:
                         logger.info(
@@ -307,6 +313,7 @@ class CacheManager:
             try:
                 data = {
                     "media": {k: v.to_dict() for k, v in self._media.items()},
+                    "album_sync_times": self._album_sync_times,
                     "last_updated": datetime.now().isoformat(),
                     "settings": {
                         "max_dimension": self.config.sync.max_dimension,
@@ -597,6 +604,8 @@ class CacheManager:
                     all_items.extend(items)
                     albums_scraped_successfully += 1
                     self._sync_progress.albums_done = albums_scraped_successfully
+                    # Record sync timestamp for this album
+                    self._album_sync_times[album_name] = now
 
                 elif album.type == "local" and album.path:
                     # Local directory - scan filesystem
@@ -606,11 +615,27 @@ class CacheManager:
                     self._sync_progress.urls_found = 0
 
                     items = self._scan_local_directory(album.path, album_name)
+                    local_urls = set()
                     for item in items:
                         item_source_types[item.url] = "local"
+                        local_urls.add(item.url)
                     all_items.extend(items)
                     albums_scraped_successfully += 1
                     self._sync_progress.albums_done = albums_scraped_successfully
+                    # Record sync timestamp for this album
+                    self._album_sync_times[album_name] = now
+
+                    # Clean up orphaned local entries: files that were deleted from disk
+                    with self._lock:
+                        for cached in self._media.values():
+                            if (cached.album_source == album_name
+                                    and cached.source_type == "local"
+                                    and cached.url not in local_urls
+                                    and not cached.deleted):
+                                # File no longer in directory scan - mark as deleted
+                                cached.deleted = True
+                                stats["deleted"] += 1
+                                logger.debug(f"Marked orphaned local file as deleted: {cached.url}")
 
             except Exception as e:
                 source_info = album.url if album.type == "google_photos" else album.path
@@ -1280,6 +1305,11 @@ class CacheManager:
         """Get all non-deleted cached media."""
         with self._lock:
             return [c for c in self._media.values() if not c.deleted]
+
+    def get_album_sync_times(self) -> Dict[str, str]:
+        """Get last sync timestamp for each album."""
+        with self._lock:
+            return self._album_sync_times.copy()
 
     def clear_cache(self) -> None:
         """Clear all cached media."""
