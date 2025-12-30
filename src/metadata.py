@@ -104,6 +104,13 @@ class MetadataExtractor:
                 if not metadata.caption:
                     metadata.caption = self._extract_xmp_description(img)
 
+                # Filter out captions that are actually camera info
+                if metadata.caption:
+                    metadata.caption = self._filter_camera_info_caption(
+                        metadata.caption,
+                        metadata.camera_make
+                    )
+
         except Exception as e:
             logger.warning(f"Error extracting metadata from {image_path}: {e}")
 
@@ -297,6 +304,67 @@ class MetadataExtractor:
             logger.debug(f"Error extracting XMP: {e}")
 
         return None
+
+    def _filter_camera_info_caption(
+        self,
+        caption: str,
+        camera_make: Optional[str]
+    ) -> Optional[str]:
+        """
+        Filter out captions that are actually camera metadata.
+
+        Some cameras (Olympus, Fujifilm, etc.) populate the XMP description
+        or EXIF ImageDescription with camera info like "OLYMPUS DIGITAL CAMERA"
+        instead of actual user-written captions.
+
+        Args:
+            caption: The extracted caption string.
+            camera_make: The camera manufacturer from EXIF.
+
+        Returns:
+            The caption if it looks like a real caption, None otherwise.
+        """
+        if not caption:
+            return None
+
+        caption_upper = caption.upper().strip()
+
+        # Patterns that indicate camera info, not real captions
+        camera_info_patterns = [
+            "DIGITAL CAMERA",
+            "DIGITAL PHOTO",
+            "CAMERA PHONE",
+            # Common camera brands that appear as standalone "captions"
+            "OLYMPUS",
+            "FUJIFILM",
+            "FUJI",
+            "CANON",
+            "NIKON",
+            "SONY",
+            "SAMSUNG",
+            "PANASONIC",
+            "KODAK",
+            "LEICA",
+            "PENTAX",
+            "RICOH",
+        ]
+
+        for pattern in camera_info_patterns:
+            if pattern in caption_upper:
+                logger.debug(f"Filtered camera info caption: {caption}")
+                return None
+
+        # If we have camera make, check if caption contains it
+        # (e.g., "OLYMPUS DIGITAL CAMERA" contains make "OLYMPUS")
+        if camera_make:
+            make_upper = camera_make.upper().strip()
+            # Extract first word of make (e.g., "OLYMPUS" from "OLYMPUS OPTICAL CO.,LTD")
+            make_brand = make_upper.split()[0] if make_upper else ""
+            if make_brand and len(make_brand) >= 3 and make_brand in caption_upper:
+                logger.debug(f"Filtered caption containing camera make '{make_brand}': {caption}")
+                return None
+
+        return caption
 
 
 def format_date(date: Optional[datetime], format_string: str = "%B %d, %Y") -> str:

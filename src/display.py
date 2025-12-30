@@ -564,6 +564,22 @@ class Display:
         # Placeholder values to filter out
         invalid_values = {'unknown location', 'add location', 'add a description'}
 
+        # Camera info patterns to filter out (some cameras put this in description fields)
+        camera_info_patterns = [
+            'DIGITAL CAMERA', 'DIGITAL PHOTO', 'CAMERA PHONE',
+            # Common camera brands that appear as standalone "captions"
+            'OLYMPUS', 'FUJIFILM', 'FUJI', 'CANON', 'NIKON', 'SONY',
+            'SAMSUNG', 'PANASONIC', 'KODAK', 'LEICA', 'PENTAX', 'RICOH',
+        ]
+
+        def is_camera_info(caption: str) -> bool:
+            """Check if caption looks like auto-generated camera info."""
+            cap_upper = caption.upper().strip()
+            for pattern in camera_info_patterns:
+                if pattern in cap_upper:
+                    return True
+            return False
+
         # Collect available caption values with their priorities
         available = []
 
@@ -576,7 +592,7 @@ class Display:
         # Embedded EXIF/IPTC caption from photo file
         if "embedded_caption" in source_priorities:
             value = self._current_media.embedded_caption
-            if value and value.lower() not in invalid_values:
+            if value and value.lower() not in invalid_values and not is_camera_info(value):
                 available.append((source_priorities["embedded_caption"], value))
 
         # Google location from Google Photos DOM
