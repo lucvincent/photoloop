@@ -88,10 +88,10 @@
             <div class="form-group" style="margin-bottom: 12px;">
                 <label class="checkbox-inline">
                     <input type="checkbox" id="update-all-captions">
-                    Update all captions from Google Photos
+                    Update all metadata from Google Photos
                 </label>
                 <p class="help-text" style="margin: 4px 0 0 26px;">
-                    Check this to re-fetch captions for all photos (slower). Otherwise, only new photos get captions.
+                    Check this to re-fetch metadata for all photos (slower). Otherwise, only new photos get metadata.
                 </p>
             </div>
             <button id="btn-sync" class="btn btn-primary">Sync Now</button>
@@ -667,7 +667,7 @@
                         progressBar.style.animation = 'none';
                         progressText.textContent = pct + '%';
                     } else if (progress.stage === 'fetching_captions') {
-                        stageDiv.textContent = 'Fetching captions from Google Photos...';
+                        stageDiv.textContent = 'Fetching metadata from Google Photos...';
                         const pct = progress.downloads_total > 0
                             ? Math.round((progress.downloads_done / progress.downloads_total) * 100)
                             : 0;
