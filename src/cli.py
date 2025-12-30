@@ -144,33 +144,71 @@ def cmd_reload(args):
 
 
 def cmd_albums(args):
-    """List configured albums."""
+    """List configured albums and local directories."""
     albums = api_call("/api/albums")
 
     if not albums:
         print("No albums configured.")
         return
 
-    print("Configured Albums")
+    print("Configured Photo Sources")
     print("=" * 60)
     for i, album in enumerate(albums, 1):
         name = album.get("name") or "(unnamed)"
-        url = album.get("url", "")
-        print(f"{i}. {name}")
-        print(f"   {url}")
+        album_type = album.get("type", "google_photos")
+        enabled = album.get("enabled", True)
+        status = "" if enabled else " [disabled]"
+
+        if album_type == "local":
+            path = album.get("path", "")
+            print(f"{i}. {name} [Local]{status}")
+            print(f"   Path: {path}")
+        else:
+            url = album.get("url", "")
+            print(f"{i}. {name} [Google Photos]{status}")
+            print(f"   URL: {url}")
         print()
 
 
 def cmd_add_album(args):
-    """Add a new album."""
+    """Add a new Google Photos album."""
     result = api_call("/api/albums", "POST", {
         "url": args.url,
-        "name": args.name or ""
+        "name": args.name or "",
+        "type": "google_photos"
     })
 
     if result.get("success"):
         print(f"Album added: {args.url}")
         print("Run 'photoloop sync' to download photos.")
+    else:
+        print(f"Error: {result.get('error', 'Unknown error')}")
+
+
+def cmd_add_local(args):
+    """Add a local directory as a photo source."""
+    # Expand and validate path
+    path = os.path.expanduser(args.path)
+    if not os.path.isabs(path):
+        path = os.path.abspath(path)
+
+    if not os.path.exists(path):
+        print(f"Error: Path does not exist: {path}")
+        sys.exit(1)
+
+    if not os.path.isdir(path):
+        print(f"Error: Path is not a directory: {path}")
+        sys.exit(1)
+
+    result = api_call("/api/albums", "POST", {
+        "path": path,
+        "name": args.name or os.path.basename(path),
+        "type": "local"
+    })
+
+    if result.get("success"):
+        print(f"Local directory added: {path}")
+        print("Run 'photoloop sync' to index photos.")
     else:
         print(f"Error: {result.get('error', 'Unknown error')}")
 
@@ -376,15 +414,16 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  photoloop status          Show current status
-  photoloop start           Force slideshow on
-  photoloop stop            Force slideshow off
-  photoloop resume          Resume schedule
-  photoloop sync            Download new photos
-  photoloop albums          List configured albums
-  photoloop add-album URL   Add a new album
-  photoloop update --check  Check for available updates
-  photoloop update          Apply available updates
+  photoloop status              Show current status
+  photoloop start               Force slideshow on
+  photoloop stop                Force slideshow off
+  photoloop resume              Resume schedule
+  photoloop sync                Download/index photos
+  photoloop albums              List configured sources
+  photoloop add-album URL       Add a Google Photos album
+  photoloop add-local PATH      Add a local directory
+  photoloop update --check      Check for available updates
+  photoloop update              Apply available updates
 
 Environment:
   PHOTOLOOP_API_URL    API URL (default: http://localhost:8080)
@@ -407,11 +446,15 @@ Environment:
     subparsers.add_parser("sync", help="Sync albums (download new photos)")
 
     # Albums
-    subparsers.add_parser("albums", help="List configured albums")
+    subparsers.add_parser("albums", help="List configured photo sources")
 
-    add_album = subparsers.add_parser("add-album", help="Add a new album")
+    add_album = subparsers.add_parser("add-album", help="Add a Google Photos album")
     add_album.add_argument("url", help="Album URL")
     add_album.add_argument("--name", "-n", help="Album name")
+
+    add_local = subparsers.add_parser("add-local", help="Add a local directory")
+    add_local.add_argument("path", help="Path to local directory")
+    add_local.add_argument("--name", "-n", help="Display name for this directory")
 
     # Photos
     subparsers.add_parser("photos", help="List cached photos")
@@ -441,6 +484,7 @@ Environment:
         "reload": cmd_reload,
         "albums": cmd_albums,
         "add-album": cmd_add_album,
+        "add-local": cmd_add_local,
         "photos": cmd_photos,
         "update": cmd_update,
     }

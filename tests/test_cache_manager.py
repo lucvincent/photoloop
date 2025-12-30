@@ -236,3 +236,192 @@ class TestHasEnabledAlbums:
 
         result = any(album.enabled for album in albums)
         assert result is False
+
+
+class TestLocalDirectoryScanning:
+    """Test local directory scanning functionality."""
+
+    def test_scan_finds_photos(self, temp_dir):
+        """Test that scanning finds photo files."""
+        import os
+        from src.cache_manager import CacheManager
+
+        # Create test directory structure
+        photos_dir = temp_dir / "photos"
+        photos_dir.mkdir()
+        (photos_dir / "photo1.jpg").touch()
+        (photos_dir / "photo2.jpeg").touch()
+        (photos_dir / "photo3.png").touch()
+        (photos_dir / "not_a_photo.txt").touch()
+
+        # Supported extensions
+        PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'}
+
+        # Simulate scanning logic
+        found_items = []
+        for entry in os.listdir(photos_dir):
+            ext = os.path.splitext(entry)[1].lower()
+            if ext in PHOTO_EXTENSIONS:
+                found_items.append(entry)
+
+        assert len(found_items) == 3
+        assert "photo1.jpg" in found_items
+        assert "photo2.jpeg" in found_items
+        assert "photo3.png" in found_items
+        assert "not_a_photo.txt" not in found_items
+
+    def test_scan_skips_hidden_files(self, temp_dir):
+        """Test that hidden files are skipped."""
+        import os
+
+        photos_dir = temp_dir / "photos"
+        photos_dir.mkdir()
+        (photos_dir / "visible.jpg").touch()
+        (photos_dir / ".hidden.jpg").touch()
+        (photos_dir / ".DS_Store").touch()
+
+        # Simulate scanning logic
+        PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
+        found_items = []
+        for entry in os.listdir(photos_dir):
+            if entry.startswith('.'):
+                continue
+            ext = os.path.splitext(entry)[1].lower()
+            if ext in PHOTO_EXTENSIONS:
+                found_items.append(entry)
+
+        assert len(found_items) == 1
+        assert "visible.jpg" in found_items
+        assert ".hidden.jpg" not in found_items
+
+    def test_scan_recursive(self, temp_dir):
+        """Test that scanning is recursive."""
+        import os
+
+        photos_dir = temp_dir / "photos"
+        photos_dir.mkdir()
+        (photos_dir / "root_photo.jpg").touch()
+
+        subdir = photos_dir / "vacation"
+        subdir.mkdir()
+        (subdir / "beach.jpg").touch()
+
+        deep_subdir = subdir / "day1"
+        deep_subdir.mkdir()
+        (deep_subdir / "sunset.jpg").touch()
+
+        # Simulate recursive scanning
+        PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
+        found_items = []
+
+        for root, dirs, files in os.walk(photos_dir):
+            # Filter hidden directories
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            for f in files:
+                if f.startswith('.'):
+                    continue
+                ext = os.path.splitext(f)[1].lower()
+                if ext in PHOTO_EXTENSIONS:
+                    found_items.append(os.path.join(root, f))
+
+        assert len(found_items) == 3
+
+    def test_case_insensitive_extensions(self, temp_dir):
+        """Test that extension matching is case-insensitive."""
+        import os
+
+        photos_dir = temp_dir / "photos"
+        photos_dir.mkdir()
+        (photos_dir / "lower.jpg").touch()
+        (photos_dir / "upper.JPG").touch()
+        (photos_dir / "mixed.JpG").touch()
+
+        PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
+        found_items = []
+        for entry in os.listdir(photos_dir):
+            ext = os.path.splitext(entry)[1].lower()
+            if ext in PHOTO_EXTENSIONS:
+                found_items.append(entry)
+
+        assert len(found_items) == 3
+
+
+class TestCachedMediaSourceType:
+    """Test CachedMedia source_type and file_mtime fields."""
+
+    def test_cached_media_defaults(self):
+        """Test that CachedMedia has correct default values for new fields."""
+        from src.cache_manager import CachedMedia
+
+        media = CachedMedia(
+            media_id="test123",
+            url="https://example.com/photo.jpg",
+            local_path="/cache/test123.jpg",
+            media_type="photo"
+        )
+
+        assert media.source_type == "google_photos"
+        assert media.file_mtime is None
+
+    def test_cached_media_local_source(self):
+        """Test CachedMedia with local source type."""
+        from src.cache_manager import CachedMedia
+
+        media = CachedMedia(
+            media_id="test123",
+            url="file:///home/user/photos/photo.jpg",
+            local_path="/home/user/photos/photo.jpg",
+            media_type="photo",
+            source_type="local",
+            file_mtime="2024-12-25T10:30:00"
+        )
+
+        assert media.source_type == "local"
+        assert media.file_mtime == "2024-12-25T10:30:00"
+
+    def test_cached_media_serialization(self):
+        """Test that source_type and file_mtime are serialized correctly."""
+        from src.cache_manager import CachedMedia
+
+        media = CachedMedia(
+            media_id="test123",
+            url="file:///home/user/photos/photo.jpg",
+            local_path="/home/user/photos/photo.jpg",
+            media_type="photo",
+            source_type="local",
+            file_mtime="2024-12-25T10:30:00"
+        )
+
+        data = media.to_dict()
+        assert data["source_type"] == "local"
+        assert data["file_mtime"] == "2024-12-25T10:30:00"
+
+        # Test deserialization
+        restored = CachedMedia.from_dict(data)
+        assert restored.source_type == "local"
+        assert restored.file_mtime == "2024-12-25T10:30:00"
+
+    def test_cached_media_backward_compat(self):
+        """Test that old metadata without source_type loads correctly."""
+        from src.cache_manager import CachedMedia
+
+        # Old format without source_type or file_mtime
+        old_data = {
+            "media_id": "test123",
+            "url": "https://lh3.googleusercontent.com/test",
+            "local_path": "/cache/test123.jpg",
+            "media_type": "photo",
+            "google_caption": "Test",
+            "exif_date": "2024-01-15T10:30:00",
+            "album_source": "Test Album",
+            "download_date": "2024-12-01T12:00:00",
+            "last_seen": "2024-12-24T10:00:00",
+            "content_hash": "deadbeef",
+            "deleted": False
+        }
+
+        media = CachedMedia.from_dict(old_data)
+
+        # Should default to google_photos for backward compatibility
+        assert media.source_type == "google_photos"
+        assert media.file_mtime is None

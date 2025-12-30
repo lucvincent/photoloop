@@ -131,6 +131,78 @@ See `config.yaml` for all settings. Key paths:
 - Cache: /var/lib/photoloop/cache
 - Logs: /var/log/photoloop
 
+### Sync Settings
+
+```yaml
+sync:
+  interval_minutes: 1440    # How often to sync (1440 = 24 hours, 0 = disabled)
+  sync_on_start: false      # Sync immediately when service starts
+  sync_time: "03:00"        # Time of day for first scheduled sync (HH:MM format)
+```
+
+**Sync behavior:**
+- `sync_time`: If set, the first scheduled sync happens at this time, then every `interval_minutes` after
+- `sync_on_start`: If true, does an immediate sync on service start (independent of `sync_time`)
+- Only enabled albums (marked "Show" in Albums tab) are synced
+
+**Examples:**
+- Sync daily at 3am: `sync_time: "03:00"`, `interval_minutes: 1440`
+- Sync hourly starting at midnight: `sync_time: "00:00"`, `interval_minutes: 60`
+- Sync every 6 hours from service start: `sync_time:` (omit), `interval_minutes: 360`
+
+### Photo Sources
+
+Albums can be Google Photos URLs or local directories:
+
+```yaml
+albums:
+  # Google Photos album
+  - url: "https://photos.app.goo.gl/..."
+    name: "Family Album"
+    type: google_photos
+    enabled: true
+
+  # Local directory
+  - path: "/home/pi/photos"
+    name: "Local Photos"
+    type: local
+    enabled: true
+```
+
+Local directories are scanned recursively. EXIF metadata (date, GPS location, captions) is extracted and cached.
+
+### Display Settings
+
+```yaml
+display:
+  order: random           # Photo order: random, alphabetical, chronological
+  photo_duration_seconds: 7
+  transition_type: fade   # fade, slide_left, slide_right, slide_up, slide_down, random
+```
+
+**Photo order options:**
+- `random`: Shuffled order, re-shuffled each time the playlist loops
+- `recency_weighted`: Random with recency bias - recent photos appear more often
+- `alphabetical`: Sorted by filename (case-insensitive)
+- `chronological`: Sorted by date (oldest first)
+
+**Recency-weighted mode settings:**
+```yaml
+display:
+  order: recency_weighted
+  recency_cutoff_years: 5.0   # Photos older than this have equal weight
+  recency_min_weight: 0.33    # Weight at cutoff (0.33 = 1/3 as likely as new photos)
+```
+
+Weight formula: Linear decay from 1.0 (today) to `recency_min_weight` (at cutoff age).
+Photos older than cutoff all have `recency_min_weight`. Every photo still appears
+once per cycle, but recent photos tend to appear earlier in the shuffled order.
+
+**Date priority** (for chronological and recency_weighted modes):
+1. EXIF date (embedded in photo metadata)
+2. Google Photos date (scraped from album)
+3. File modification time (fallback if no date metadata)
+
 ## Development Notes
 
 ### Known Issues

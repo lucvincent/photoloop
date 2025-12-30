@@ -738,29 +738,33 @@ class AlbumScraper:
                         container.click()
                         time.sleep(2)
 
-                        # Extract caption and location
+                        # Extract caption, location, and date
                         info = self._extract_info_from_detail_view(driver)
                         caption = info.get('caption')
                         location = info.get('location')
+                        google_date = info.get('date')
                         captions[base_url] = caption
                         total_found += 1
 
                         # Log progress every photo for debugging
                         if total_found <= 10 or total_found % 50 == 0:
-                            logger.info(f"Processed photo {total_found}: caption={'yes' if caption else 'no'}, location={'yes' if location else 'no'}")
+                            logger.info(f"Processed photo {total_found}: caption={'yes' if caption else 'no'}, location={'yes' if location else 'no'}, date={'yes' if google_date else 'no'}")
 
                         if caption:
                             logger.info(f"Caption found: {caption[:60]}...")
                         if location:
                             logger.info(f"Location found: {location}")
 
-                        # Call callback to save caption and location immediately
+                        # Call callback to save caption, location, and date immediately
                         if caption_found_callback:
                             try:
-                                caption_found_callback(base_url, caption, location)
+                                caption_found_callback(base_url, caption, location, google_date)
                             except TypeError:
-                                # Backwards compatibility: old callback signature without location
-                                caption_found_callback(base_url, caption)
+                                # Backwards compatibility: old callback signature without date/location
+                                try:
+                                    caption_found_callback(base_url, caption, location)
+                                except TypeError:
+                                    caption_found_callback(base_url, caption)
                             except Exception as e:
                                 logger.warning(f"Error in caption callback: {e}")
 
@@ -836,20 +840,22 @@ class AlbumScraper:
 
     def _extract_info_from_detail_view(self, driver: webdriver.Chrome) -> dict:
         """
-        Extract caption and location from the photo detail view.
+        Extract caption, location, and date from the photo detail view.
 
         Uses targeted DOM selectors based on Google Photos' structure:
         - Location: div.R9U8ab inside [aria-label="Edit location"]
         - Description: div.oBMhZb (filtered to exclude metadata)
+        - Date: Text matching date patterns in the info panel
 
         Args:
             driver: WebDriver with photo detail view open.
 
         Returns:
-            Dict with 'caption' and 'location' keys (values may be None).
+            Dict with 'caption', 'location', and 'date' keys (values may be None).
         """
         import re
-        result = {'caption': None, 'location': None}
+        from datetime import datetime
+        result = {'caption': None, 'location': None, 'date': None}
 
         try:
             from selenium.webdriver.common.action_chains import ActionChains
@@ -886,6 +892,43 @@ class AlbumScraper:
                     result['location'] = location
                     logger.debug(f"Found location via DOM: {result['location']}")
                     break
+
+            # Extract date from info panel
+            # Google Photos displays dates in formats like:
+            # - "Jan 15, 2024" or "January 15, 2024"
+            # - "Mon, Jan 15, 2024" (with day of week)
+            # - Sometimes with time like "Jan 15, 2024 8:13 AM"
+            # Date patterns to match (month names, day, year)
+            date_pattern = re.compile(
+                r'(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+)?'  # Optional day of week
+                r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|'
+                r'Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+                r'\s+(\d{1,2}),?\s+(\d{4})',  # Month day, year
+                re.IGNORECASE
+            )
+
+            # Look in all text elements in the info panel
+            # Date is typically in div.R9U8ab elements (same as location/filename)
+            info_elements = driver.find_elements(By.CSS_SELECTOR, 'div.R9U8ab, div.oBMhZb, [role="listitem"] span')
+            for elem in info_elements:
+                text = elem.text
+                if not text:
+                    continue
+                match = date_pattern.search(text)
+                if match:
+                    month_str, day_str, year_str = match.groups()
+                    try:
+                        # Normalize month name to 3-letter abbreviation
+                        month_abbrev = month_str[:3].capitalize()
+                        # Parse the date
+                        date_str = f"{month_abbrev} {day_str}, {year_str}"
+                        parsed_date = datetime.strptime(date_str, "%b %d, %Y")
+                        result['date'] = parsed_date.isoformat()
+                        logger.debug(f"Found date via DOM: {result['date']}")
+                        break
+                    except ValueError as e:
+                        logger.debug(f"Failed to parse date '{text}': {e}")
+                        continue
 
             # Extract description using targeted selector
             # Google Photos uses div.oBMhZb for info panel content

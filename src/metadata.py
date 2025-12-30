@@ -107,13 +107,10 @@ class MetadataExtractor:
         except Exception as e:
             logger.warning(f"Error extracting metadata from {image_path}: {e}")
 
-        # Fallback to file modification time if no EXIF date
-        if not metadata.date_taken:
-            try:
-                mtime = os.path.getmtime(image_path)
-                metadata.date_taken = datetime.fromtimestamp(mtime)
-            except Exception:
-                pass
+        # NOTE: We intentionally do NOT fall back to file modification time.
+        # For downloaded photos, file mtime would show the download date,
+        # not when the photo was actually taken. It's better to show no date
+        # than a misleading one.
 
         return metadata
 

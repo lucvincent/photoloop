@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 """
 Image processing for scaling, cropping, and Ken Burns effects.
-Handles smart face-aware cropping and generates animation parameters.
+Handles smart cropping using multiple methods (face detection, saliency, aesthetics).
 """
 
 import logging
@@ -10,9 +10,12 @@ import random
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+import numpy as np
 from PIL import Image
 
 from .face_detector import FaceRegion, get_faces_bounding_box, get_faces_center
+from .saliency_detector import SaliencyDetector
+from .aesthetic_cropper import AestheticCropper, TORCH_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +120,13 @@ class ImageProcessor:
         screen_width: int,
         screen_height: int,
         scaling_mode: str = "fill",
+        smart_crop_method: str = "face",
         face_position: str = "center",
         fallback_crop: str = "center",
         max_crop_percent: int = 15,
+        saliency_threshold: float = 0.3,
+        saliency_coverage: float = 0.9,
+        crop_bias: str = "none",
         background_color: Tuple[int, int, int] = (0, 0, 0),
         ken_burns_enabled: bool = True,
         ken_burns_zoom_range: Tuple[float, float] = (1.0, 1.15),
@@ -133,9 +140,12 @@ class ImageProcessor:
             screen_width: Display width in pixels.
             screen_height: Display height in pixels.
             scaling_mode: "fill", "fit", "balanced", or "stretch".
+            smart_crop_method: "face", "saliency", or "aesthetic".
             face_position: "center", "rule_of_thirds", or "top_third".
-            fallback_crop: "center", "top", or "bottom" when no faces.
+            fallback_crop: "center", "top", or "bottom" when no faces/regions.
             max_crop_percent: For "balanced" mode, max % of image to crop (0-50).
+            saliency_threshold: For saliency method, min threshold (0-1).
+            saliency_coverage: For saliency method, how much saliency to cover (0-1).
             background_color: RGB tuple for letterbox/pillarbox fill.
             ken_burns_enabled: Whether to generate Ken Burns animations.
             ken_burns_zoom_range: (min_zoom, max_zoom) for Ken Burns.
@@ -147,15 +157,37 @@ class ImageProcessor:
         self.screen_aspect = screen_width / screen_height
 
         self.scaling_mode = scaling_mode
+        self.smart_crop_method = smart_crop_method
         self.face_position = face_position
         self.fallback_crop = fallback_crop
         self.max_crop_percent = max_crop_percent
+        self.saliency_threshold = saliency_threshold
+        self.saliency_coverage = saliency_coverage
+        self.crop_bias = crop_bias
         self.background_color = background_color
 
         self.ken_burns_enabled = ken_burns_enabled
         self.ken_burns_zoom_range = ken_burns_zoom_range
         self.ken_burns_pan_speed = ken_burns_pan_speed
         self.ken_burns_randomize = ken_burns_randomize
+
+        # Initialize smart cropping modules (lazy loading)
+        self._saliency_detector: Optional[SaliencyDetector] = None
+        self._aesthetic_cropper: Optional[AestheticCropper] = None
+
+    @property
+    def saliency_detector(self) -> SaliencyDetector:
+        """Lazy-load saliency detector."""
+        if self._saliency_detector is None:
+            self._saliency_detector = SaliencyDetector(threshold=self.saliency_threshold)
+        return self._saliency_detector
+
+    @property
+    def aesthetic_cropper(self) -> AestheticCropper:
+        """Lazy-load aesthetic cropper."""
+        if self._aesthetic_cropper is None:
+            self._aesthetic_cropper = AestheticCropper()
+        return self._aesthetic_cropper
 
     def compute_display_params(
         self,
@@ -168,7 +200,7 @@ class ImageProcessor:
 
         Args:
             image_path: Path to the image file.
-            faces: Pre-detected faces (if available).
+            faces: Pre-detected faces (if available, used for "face" method).
             photo_duration: How long the photo will be displayed (for Ken Burns).
 
         Returns:
@@ -190,6 +222,14 @@ class ImageProcessor:
 
         img_aspect = img_width / img_height
 
+        # Get saliency map if using saliency or aesthetic methods
+        saliency_map = None
+        if self.smart_crop_method in ("saliency", "aesthetic"):
+            try:
+                saliency_map = self.saliency_detector.detect_saliency_map(image_path)
+            except Exception as e:
+                logger.warning(f"Saliency detection failed, using fallback: {e}")
+
         # Calculate crop region based on scaling mode
         if self.scaling_mode == "fit":
             # No cropping needed for fit mode
@@ -200,13 +240,13 @@ class ImageProcessor:
         elif self.scaling_mode == "balanced":
             # Balanced mode: partial cropping to reduce bars while keeping most of image
             crop_region = self._compute_balanced_crop(
-                img_width, img_height,
-                faces or []
+                image_path, img_width, img_height,
+                faces or [], saliency_map
             )
         else:  # fill mode
             crop_region = self._compute_fill_crop(
-                img_width, img_height,
-                faces or []
+                image_path, img_width, img_height,
+                faces or [], saliency_map
             )
 
         # Generate Ken Burns animation
@@ -227,17 +267,21 @@ class ImageProcessor:
 
     def _compute_fill_crop(
         self,
+        image_path: str,
         img_width: int,
         img_height: int,
-        faces: List[FaceRegion]
+        faces: List[FaceRegion],
+        saliency_map: Optional[np.ndarray] = None
     ) -> CropRegion:
         """
         Compute crop region for fill mode (image fills screen, excess cropped).
 
         Args:
+            image_path: Path to the image file.
             img_width: Image width.
             img_height: Image height.
             faces: Detected faces.
+            saliency_map: Pre-computed saliency map (for saliency/aesthetic methods).
 
         Returns:
             CropRegion for optimal crop.
@@ -254,25 +298,20 @@ class ImageProcessor:
             crop_width = 1.0
             crop_height = img_aspect / self.screen_aspect
 
-        # Determine crop position
-        if faces:
-            # Use face-aware positioning
-            crop_x, crop_y = self._position_crop_for_faces(
-                crop_width, crop_height, faces
-            )
-        else:
-            # Use fallback positioning
-            crop_x, crop_y = self._get_fallback_crop_position(
-                crop_width, crop_height
-            )
+        # Determine crop position based on smart_crop_method
+        crop_x, crop_y = self._get_smart_crop_position(
+            image_path, crop_width, crop_height, faces, saliency_map
+        )
 
         return CropRegion(crop_x, crop_y, crop_width, crop_height)
 
     def _compute_balanced_crop(
         self,
+        image_path: str,
         img_width: int,
         img_height: int,
-        faces: List[FaceRegion]
+        faces: List[FaceRegion],
+        saliency_map: Optional[np.ndarray] = None
     ) -> CropRegion:
         """
         Compute crop region for balanced mode.
@@ -283,9 +322,11 @@ class ImageProcessor:
         If large, it limits cropping and accepts some bars.
 
         Args:
+            image_path: Path to the image file.
             img_width: Image width.
             img_height: Image height.
             faces: Detected faces.
+            saliency_map: Pre-computed saliency map (for saliency/aesthetic methods).
 
         Returns:
             CropRegion for balanced crop.
@@ -328,17 +369,78 @@ class ImageProcessor:
                 ideal_width = crop_height * self.screen_aspect / img_aspect
                 crop_width = min(1.0, ideal_width)
 
-        # Determine crop position (same logic as fill mode)
-        if faces:
-            crop_x, crop_y = self._position_crop_for_faces(
-                crop_width, crop_height, faces
-            )
-        else:
-            crop_x, crop_y = self._get_fallback_crop_position(
-                crop_width, crop_height
-            )
+        # Determine crop position using smart crop method
+        crop_x, crop_y = self._get_smart_crop_position(
+            image_path, crop_width, crop_height, faces, saliency_map
+        )
 
         return CropRegion(crop_x, crop_y, crop_width, crop_height)
+
+    def _get_smart_crop_position(
+        self,
+        image_path: str,
+        crop_width: float,
+        crop_height: float,
+        faces: List[FaceRegion],
+        saliency_map: Optional[np.ndarray] = None
+    ) -> Tuple[float, float]:
+        """
+        Get crop position using the configured smart crop method.
+
+        Args:
+            image_path: Path to the image file.
+            crop_width: Width of crop region (0-1).
+            crop_height: Height of crop region (0-1).
+            faces: Detected faces (used for "face" method).
+            saliency_map: Pre-computed saliency map (for saliency/aesthetic methods).
+
+        Returns:
+            (x, y) position for crop region.
+        """
+        if self.smart_crop_method == "saliency":
+            crop_x, crop_y = self._position_crop_for_saliency(
+                image_path, crop_width, crop_height, saliency_map
+            )
+        elif self.smart_crop_method == "aesthetic":
+            crop_x, crop_y = self._position_crop_for_aesthetics(
+                image_path, crop_width, crop_height, saliency_map
+            )
+        else:  # "face" method (default)
+            if faces:
+                crop_x, crop_y = self._position_crop_for_faces(
+                    crop_width, crop_height, faces
+                )
+            else:
+                crop_x, crop_y = self._get_fallback_crop_position(crop_width, crop_height)
+
+        # Apply crop bias to preserve top or bottom of image
+        if self.crop_bias == "top":
+            # Minimize cropping from top - shift crop upward as much as possible
+            # while still keeping any detected faces visible
+            if faces:
+                # Find the lowest face bottom to ensure we don't crop faces
+                face_bottoms = [f.y + f.height for f in faces if f.width >= 0.02 or f.height >= 0.02]
+                if face_bottoms:
+                    min_crop_y = max(0, max(face_bottoms) - crop_height + 0.05)
+                    crop_y = max(0, min(crop_y, min_crop_y))
+                else:
+                    crop_y = 0
+            else:
+                crop_y = 0
+        elif self.crop_bias == "bottom":
+            # Minimize cropping from bottom - shift crop downward
+            if faces:
+                # Find the highest face top
+                face_tops = [f.y for f in faces if f.width >= 0.02 or f.height >= 0.02]
+                if face_tops:
+                    max_crop_y = min(1 - crop_height, min(face_tops) - 0.05)
+                    crop_y = min(1 - crop_height, max(crop_y, max_crop_y))
+                else:
+                    crop_y = 1 - crop_height
+            else:
+                crop_y = 1 - crop_height
+
+        return crop_x, crop_y
 
     def _position_crop_for_faces(
         self,
@@ -431,6 +533,167 @@ class ImageProcessor:
         crop_y = max(0, min(1 - crop_height, crop_y))
 
         return crop_x, crop_y
+
+    def _position_crop_for_saliency(
+        self,
+        image_path: str,
+        crop_width: float,
+        crop_height: float,
+        saliency_map: Optional[np.ndarray] = None
+    ) -> Tuple[float, float]:
+        """
+        Position crop to maximize coverage of salient regions.
+
+        Uses U2-Net saliency detection to find visually important areas
+        (faces, objects, interesting scene elements) and positions the
+        crop to include as much of them as possible.
+
+        Args:
+            image_path: Path to the image file.
+            crop_width: Width of crop region (0-1).
+            crop_height: Height of crop region (0-1).
+            saliency_map: Pre-computed saliency map (optional).
+
+        Returns:
+            (x, y) position for crop region.
+        """
+        # Get or compute saliency map
+        if saliency_map is None:
+            try:
+                saliency_map = self.saliency_detector.detect_saliency_map(image_path)
+            except Exception as e:
+                logger.warning(f"Saliency detection failed: {e}")
+                return self._get_fallback_crop_position(crop_width, crop_height)
+
+        if saliency_map is None:
+            return self._get_fallback_crop_position(crop_width, crop_height)
+
+        # Use integral image for efficient saliency sum calculation
+        height, width = saliency_map.shape
+        crop_w_px = int(crop_width * width)
+        crop_h_px = int(crop_height * height)
+
+        if crop_w_px >= width or crop_h_px >= height:
+            return self._get_fallback_crop_position(crop_width, crop_height)
+
+        # Compute integral image
+        integral = np.zeros((height + 1, width + 1), dtype=np.float64)
+        integral[1:, 1:] = np.cumsum(np.cumsum(saliency_map, axis=0), axis=1)
+
+        # Search for best position
+        best_x, best_y = 0, 0
+        best_score = -1
+
+        # Use step size for efficiency
+        step = max(1, min(crop_w_px, crop_h_px) // 20)
+
+        for y in range(0, height - crop_h_px + 1, step):
+            for x in range(0, width - crop_w_px + 1, step):
+                # Calculate sum using integral image
+                x2, y2 = x + crop_w_px, y + crop_h_px
+                score = (
+                    integral[y2, x2]
+                    - integral[y, x2]
+                    - integral[y2, x]
+                    + integral[y, x]
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_x, best_y = x, y
+
+        # Refine with smaller steps around best position
+        for dy in range(-step, step + 1):
+            for dx in range(-step, step + 1):
+                x = max(0, min(width - crop_w_px, best_x + dx))
+                y = max(0, min(height - crop_h_px, best_y + dy))
+
+                x2, y2 = x + crop_w_px, y + crop_h_px
+                score = (
+                    integral[y2, x2]
+                    - integral[y, x2]
+                    - integral[y2, x]
+                    + integral[y, x]
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best_x, best_y = x, y
+
+        # Convert to normalized coordinates
+        crop_x = best_x / width
+        crop_y = best_y / height
+
+        return crop_x, crop_y
+
+    def _position_crop_for_aesthetics(
+        self,
+        image_path: str,
+        crop_width: float,
+        crop_height: float,
+        saliency_map: Optional[np.ndarray] = None
+    ) -> Tuple[float, float]:
+        """
+        Position crop using aesthetic scoring (GAIC or composition rules).
+
+        Uses either the GAIC neural network (if available) or a fallback
+        composition-based approach that combines saliency with rule-of-thirds
+        positioning.
+
+        Args:
+            image_path: Path to the image file.
+            crop_width: Width of crop region (0-1).
+            crop_height: Height of crop region (0-1).
+            saliency_map: Pre-computed saliency map (optional).
+
+        Returns:
+            (x, y) position for crop region.
+        """
+        try:
+            # Try aesthetic cropper first
+            target_ratio = crop_width / crop_height * self.screen_aspect
+            best_crop = self.aesthetic_cropper.find_best_crop(
+                image_path,
+                target_ratio=target_ratio,
+                saliency_map=saliency_map
+            )
+
+            if best_crop is not None:
+                return best_crop.x, best_crop.y
+        except Exception as e:
+            logger.warning(f"Aesthetic cropping failed: {e}")
+
+        # Fallback: combine saliency with composition rules
+        if saliency_map is not None:
+            # Find the saliency center and position crop around it
+            height, width = saliency_map.shape
+
+            # Calculate weighted center of saliency
+            y_coords, x_coords = np.mgrid[0:height, 0:width]
+            x_norm = x_coords / width
+            y_norm = y_coords / height
+
+            total_weight = np.sum(saliency_map)
+            if total_weight > 0.001:
+                center_x = np.sum(x_norm * saliency_map) / total_weight
+                center_y = np.sum(y_norm * saliency_map) / total_weight
+
+                # Position crop to put saliency center at rule-of-thirds point
+                # Use lower third intersection (good for landscapes with sky)
+                target_x = 0.5  # Centered horizontally
+                target_y = 0.33  # Upper third
+
+                # Calculate crop position
+                crop_x = center_x - target_x * crop_width
+                crop_y = center_y - target_y * crop_height
+
+                # Clamp to valid range
+                crop_x = max(0, min(1 - crop_width, crop_x))
+                crop_y = max(0, min(1 - crop_height, crop_y))
+
+                return crop_x, crop_y
+
+        return self._get_fallback_crop_position(crop_width, crop_height)
 
     def _get_fallback_crop_position(
         self,
@@ -673,10 +936,18 @@ class ImageProcessor:
                 )
             elif self.scaling_mode == "balanced":
                 # Balanced mode: resize maintaining aspect ratio, add bars if needed
-                img.thumbnail(
-                    (self.screen_width, self.screen_height),
-                    Image.Resampling.LANCZOS
-                )
+                # Note: thumbnail() only shrinks, so we need proper resize for small images
+                img_aspect = img.width / img.height
+                screen_aspect = self.screen_width / self.screen_height
+                if img_aspect > screen_aspect:
+                    # Image is wider - fit by width
+                    new_width = self.screen_width
+                    new_height = int(self.screen_width / img_aspect)
+                else:
+                    # Image is taller - fit by height
+                    new_height = self.screen_height
+                    new_width = int(self.screen_height * img_aspect)
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                 # Create background with configured color and center image
                 result = Image.new("RGB", (self.screen_width, self.screen_height), self.background_color)
                 paste_x = (self.screen_width - img.width) // 2
@@ -684,10 +955,16 @@ class ImageProcessor:
                 result.paste(img, (paste_x, paste_y))
                 img = result
             else:  # fit mode
-                img.thumbnail(
-                    (self.screen_width, self.screen_height),
-                    Image.Resampling.LANCZOS
-                )
+                # Note: thumbnail() only shrinks, so we need proper resize for small images
+                img_aspect = img.width / img.height
+                screen_aspect = self.screen_width / self.screen_height
+                if img_aspect > screen_aspect:
+                    new_width = self.screen_width
+                    new_height = int(self.screen_width / img_aspect)
+                else:
+                    new_height = self.screen_height
+                    new_width = int(self.screen_height * img_aspect)
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
                 # Create background with configured color and center image
                 result = Image.new("RGB", (self.screen_width, self.screen_height), self.background_color)
                 paste_x = (self.screen_width - img.width) // 2

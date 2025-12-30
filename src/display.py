@@ -135,9 +135,13 @@ class Display:
             screen_width=self.screen_width,
             screen_height=self.screen_height,
             scaling_mode=config.scaling.mode,
+            smart_crop_method=config.scaling.smart_crop_method,
             face_position=config.scaling.face_position,
             fallback_crop=config.scaling.fallback_crop,
             max_crop_percent=config.scaling.max_crop_percent,
+            saliency_threshold=config.scaling.saliency_threshold,
+            saliency_coverage=config.scaling.saliency_coverage,
+            crop_bias=config.scaling.crop_bias,
             background_color=tuple(config.scaling.background_color),
             ken_burns_enabled=config.ken_burns.enabled,
             ken_burns_zoom_range=tuple(config.ken_burns.zoom_range),
@@ -607,14 +611,18 @@ class Display:
         overlay_cfg = self.config.overlay
         lines = []
 
-        if overlay_cfg.show_date and self._current_media.exif_date:
-            try:
-                date = datetime.fromisoformat(self._current_media.exif_date)
-                date_str = format_date(date, overlay_cfg.date_format)
-                if date_str:
-                    lines.append(date_str)
-            except Exception:
-                pass
+        if overlay_cfg.show_date:
+            # Use EXIF date first, fall back to Google Photos date if EXIF unavailable
+            # Never show download date - only actual photo dates
+            date_source = self._current_media.exif_date or self._current_media.google_date
+            if date_source:
+                try:
+                    date = datetime.fromisoformat(date_source)
+                    date_str = format_date(date, overlay_cfg.date_format)
+                    if date_str:
+                        lines.append(date_str)
+                except Exception:
+                    pass
 
         if overlay_cfg.show_caption:
             # Build caption from available sources based on priority

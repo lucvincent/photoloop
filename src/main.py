@@ -6,6 +6,7 @@ Orchestrates all components: display, caching, scheduling, and web interface.
 """
 
 import argparse
+from datetime import datetime, timedelta
 import logging
 import os
 import signal
@@ -230,6 +231,25 @@ class PhotoLoop:
             parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
         return ", ".join(parts)
 
+    def _seconds_until_time(self, time_str: str) -> int:
+        """Calculate seconds until a given time (HH:MM format).
+
+        If the time has already passed today, returns seconds until that time tomorrow.
+        """
+        try:
+            target_hour, target_minute = map(int, time_str.split(':'))
+            now = datetime.now()
+            target = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+
+            # If target time has passed today, schedule for tomorrow
+            if target <= now:
+                target += timedelta(days=1)
+
+            return int((target - now).total_seconds())
+        except (ValueError, AttributeError):
+            logger.warning(f"Invalid sync_time format: {time_str}, expected HH:MM")
+            return 0
+
     def _start_sync_thread(self) -> None:
         """Start the background sync thread."""
         if self.config.sync.interval_minutes <= 0:
@@ -239,16 +259,37 @@ class PhotoLoop:
         def sync_loop():
             interval = self.config.sync.interval_minutes * 60
             interval_str = self._format_interval(self.config.sync.interval_minutes)
+            first_sync_done = False
 
             # If sync_on_start is enabled, sync after a short delay
-            # Otherwise, wait for the full interval before first sync
             if self.config.sync.sync_on_start:
                 logger.info("Sync on start enabled, will sync in 30 seconds...")
-                time.sleep(30)
-            else:
-                logger.info(f"Waiting {interval_str} until first scheduled sync")
-                if self._shutdown_event.wait(interval):
+                if self._shutdown_event.wait(30):
                     return  # Shutdown requested
+                try:
+                    logger.info("Starting sync-on-start...")
+                    self.cache_manager.sync()
+                    logger.info("Sync-on-start completed")
+                except Exception as e:
+                    logger.error(f"Sync-on-start error: {e}")
+
+            # Wait for first scheduled sync time
+            sync_time = self.config.sync.sync_time
+            if sync_time:
+                # Wait until the specified time for first scheduled sync
+                wait_seconds = self._seconds_until_time(sync_time)
+                if wait_seconds > 0:
+                    wait_str = self._format_interval(wait_seconds // 60)
+                    logger.info(f"Waiting until {sync_time} for first scheduled sync ({wait_str})")
+                    if self._shutdown_event.wait(wait_seconds):
+                        return  # Shutdown requested
+            else:
+                # No sync_time specified, wait for interval before first sync
+                # (unless sync_on_start already did a sync)
+                if not self.config.sync.sync_on_start:
+                    logger.info(f"Waiting {interval_str} until first scheduled sync")
+                    if self._shutdown_event.wait(interval):
+                        return  # Shutdown requested
 
             while not self._shutdown_event.is_set():
                 try:
@@ -265,7 +306,11 @@ class PhotoLoop:
         self.sync_thread = threading.Thread(target=sync_loop, daemon=True)
         self.sync_thread.start()
         interval_str = self._format_interval(self.config.sync.interval_minutes)
-        logger.info(f"Sync thread started (interval: {interval_str})")
+        sync_time = self.config.sync.sync_time
+        if sync_time:
+            logger.info(f"Sync thread started (first sync at {sync_time}, then every {interval_str})")
+        else:
+            logger.info(f"Sync thread started (interval: {interval_str})")
 
     def _on_config_change(self) -> None:
         """Handle configuration changes from web interface."""

@@ -23,10 +23,17 @@ DEFAULT_CONFIG_PATHS = [
 
 @dataclass
 class AlbumConfig:
-    """Configuration for a single album."""
-    url: str
-    name: str = ""
-    enabled: bool = True  # Whether to include this album in the slideshow
+    """Configuration for a single photo source (album or local directory).
+
+    Supported types:
+        - "google_photos": Public Google Photos album (requires url)
+        - "local": Local directory on filesystem (requires path)
+    """
+    url: str = ""                         # Google Photos URL (for type=google_photos)
+    path: str = ""                        # Local directory path (for type=local)
+    name: str = ""                        # Display name
+    enabled: bool = True                  # Whether to include in slideshow
+    type: str = "google_photos"           # "google_photos" or "local"
 
 
 @dataclass
@@ -34,6 +41,7 @@ class SyncConfig:
     """Sync settings."""
     interval_minutes: int = 1440  # Default: 24 hours
     sync_on_start: bool = False  # Whether to sync immediately on service start
+    sync_time: Optional[str] = None  # Time of day for first sync (HH:MM format, e.g., "03:00")
     full_resolution: bool = True
     max_dimension: int = 1920
     # Note: Caption priority is now configured in overlay.caption_sources at display time
@@ -47,7 +55,10 @@ class DisplayConfig:
     video_enabled: bool = True
     transition_type: str = "fade"  # fade, slide_left, slide_right, slide_up, slide_down, random
     transition_duration_ms: int = 1000
-    order: str = "random"  # random, sequential
+    order: str = "random"  # random, recency_weighted, alphabetical, chronological
+    # Recency-weighted random settings (only used when order = "recency_weighted")
+    recency_cutoff_years: float = 5.0  # Photos older than this all have equal weight
+    recency_min_weight: float = 0.33   # Weight at cutoff age (1.0 = no bias, lower = stronger bias)
 
 
 @dataclass
@@ -55,11 +66,25 @@ class ScalingConfig:
     """Scaling and cropping settings."""
     mode: str = "fill"  # fill, fit, balanced, stretch
     smart_crop: bool = True
-    face_detection: bool = True
+    # Smart crop method: which algorithm to use for intelligent cropping
+    #   - face: Use YuNet face detection (default, fastest)
+    #   - saliency: Use U2-Net to detect all visually important regions
+    #   - aesthetic: Use GAIC model to find aesthetically pleasing crops
+    smart_crop_method: str = "face"  # face, saliency, aesthetic
+    face_detection: bool = True  # Deprecated: use smart_crop_method instead
     face_position: str = "center"  # center, rule_of_thirds, top_third
     fallback_crop: str = "center"  # center, top, bottom
     # For "balanced" mode: max percentage of image that can be cropped (0-50)
     max_crop_percent: int = 15
+    # For saliency method: minimum saliency threshold (0-1)
+    saliency_threshold: float = 0.3
+    # For saliency method: how much of total saliency to include in crop (0-1)
+    saliency_coverage: float = 0.9
+    # Crop bias: prioritize preserving a certain part of the image
+    #   - none: Let smart crop decide based on detected content
+    #   - top: Minimize cropping from top (preserve sky/mountains)
+    #   - bottom: Minimize cropping from bottom
+    crop_bias: str = "none"  # none, top, bottom
     # Background/fill color for letterbox/pillarbox bars [R, G, B]
     background_color: List[int] = field(default_factory=lambda: [0, 0, 0])
 
@@ -86,12 +111,22 @@ class OverlayConfig:
     background_color: List[int] = field(default_factory=lambda: [0, 0, 0, 128])
     padding: int = 20
     max_caption_length: int = 200
+    # Date source preference - which date to display when multiple are available
+    # Options:
+    #   "exif_first"   - Use EXIF date if available, fall back to Google Photos date (default)
+    #   "google_first" - Use Google Photos date if available, fall back to EXIF date
+    #   "exif_only"    - Only show EXIF date, never Google Photos date
+    #   "google_only"  - Only show Google Photos date, never EXIF date
+    # Note: EXIF date comes from photo metadata (embedded in file)
+    #       Google date comes from Google Photos album (scraped from web UI)
+    date_source: str = "exif_first"
     # Caption source priorities (lower number = higher priority)
     # Available sources: google_caption, embedded_caption, google_location, exif_location
     caption_sources: Dict[str, int] = field(default_factory=lambda: {
         "google_caption": 1,
         "embedded_caption": 2,
-        "google_location": 3
+        "google_location": 3,
+        "exif_location": 4
     })
     # How many caption sources to show (1 = just highest priority with data)
     max_caption_sources: int = 1
@@ -213,16 +248,20 @@ def load_config(config_path: Optional[str] = None) -> PhotoLoopConfig:
     if not found_path:
         logger.info("No config file found, using defaults")
 
-    # Parse albums
+    # Parse albums (supports both Google Photos albums and local directories)
     albums = []
     for album_data in config_data.get('albums', []):
         if isinstance(album_data, str):
-            albums.append(AlbumConfig(url=album_data))
+            # Legacy format: just a URL string
+            albums.append(AlbumConfig(url=album_data, type="google_photos"))
         elif isinstance(album_data, dict):
+            album_type = album_data.get('type', 'google_photos')
             albums.append(AlbumConfig(
                 url=album_data.get('url', ''),
+                path=album_data.get('path', ''),
                 name=album_data.get('name', ''),
-                enabled=album_data.get('enabled', True)
+                enabled=album_data.get('enabled', True),
+                type=album_type
             ))
 
     # Build config object
@@ -304,15 +343,29 @@ def validate_config(config: PhotoLoopConfig) -> List[str]:
     """
     errors = []
 
-    # Check albums
+    # Check albums (supports both Google Photos albums and local directories)
     if not config.albums:
-        errors.append("No albums configured. Add at least one album URL.")
+        errors.append("No albums configured. Add at least one album URL or local directory.")
 
     for i, album in enumerate(config.albums):
-        if not album.url:
-            errors.append(f"Album {i+1} has no URL.")
-        elif not (album.url.startswith('http://') or album.url.startswith('https://')):
-            errors.append(f"Album {i+1} URL must start with http:// or https://")
+        if album.type not in ('google_photos', 'local'):
+            errors.append(f"Album {i+1} has invalid type '{album.type}'. Must be 'google_photos' or 'local'.")
+        elif album.type == 'google_photos':
+            # Validate Google Photos album
+            if not album.url:
+                errors.append(f"Album {i+1} (Google Photos) has no URL.")
+            elif not (album.url.startswith('http://') or album.url.startswith('https://')):
+                errors.append(f"Album {i+1} URL must start with http:// or https://")
+        elif album.type == 'local':
+            # Validate local directory
+            if not album.path:
+                errors.append(f"Album {i+1} (local) has no path.")
+            else:
+                expanded_path = os.path.expanduser(album.path)
+                if not os.path.exists(expanded_path):
+                    errors.append(f"Album {i+1} path does not exist: {album.path}")
+                elif not os.path.isdir(expanded_path):
+                    errors.append(f"Album {i+1} path is not a directory: {album.path}")
 
     # Check display settings
     valid_transitions = ['fade', 'slide_left', 'slide_right', 'slide_up', 'slide_down', 'random']
@@ -326,11 +379,23 @@ def validate_config(config: PhotoLoopConfig) -> List[str]:
     if config.scaling.mode not in ['fill', 'fit', 'balanced', 'stretch']:
         errors.append("Scaling mode must be 'fill', 'fit', 'balanced', or 'stretch'")
 
+    if config.scaling.smart_crop_method not in ['face', 'saliency', 'aesthetic']:
+        errors.append("Smart crop method must be 'face', 'saliency', or 'aesthetic'")
+
     if not (0 <= config.scaling.max_crop_percent <= 50):
         errors.append("max_crop_percent must be between 0 and 50")
 
+    if not (0 <= config.scaling.saliency_threshold <= 1):
+        errors.append("saliency_threshold must be between 0 and 1")
+
+    if not (0 <= config.scaling.saliency_coverage <= 1):
+        errors.append("saliency_coverage must be between 0 and 1")
+
     if config.scaling.face_position not in ['center', 'rule_of_thirds', 'top_third']:
         errors.append("Face position must be 'center', 'rule_of_thirds', or 'top_third'")
+
+    if config.scaling.crop_bias not in ['none', 'top', 'bottom']:
+        errors.append("Crop bias must be 'none', 'top', or 'bottom'")
 
     # Check Ken Burns settings
     if len(config.ken_burns.zoom_range) != 2:

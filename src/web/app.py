@@ -150,7 +150,7 @@ def create_app(
 
     @app.route('/api/albums', methods=['GET'])
     def api_get_albums():
-        """Get configured albums with photo counts."""
+        """Get configured albums and local directories with photo counts."""
         # Count photos per album
         photo_counts = {}
         if app.cache_manager:
@@ -160,9 +160,11 @@ def create_app(
 
         albums = []
         for a in app.photoloop_config.albums:
-            album_name = a.name or a.url
+            album_name = a.name or (a.url if a.type == "google_photos" else a.path)
             albums.append({
+                "type": a.type,
                 "url": a.url,
+                "path": a.path,
                 "name": a.name,
                 "enabled": a.enabled,
                 "photo_count": photo_counts.get(album_name, 0)
@@ -171,18 +173,44 @@ def create_app(
 
     @app.route('/api/albums', methods=['POST'])
     def api_add_album():
-        """Add a new album."""
+        """Add a new album or local directory."""
         try:
             data = request.get_json()
-            url = data.get('url', '').strip()
+            album_type = data.get('type', 'google_photos').strip()
             name = data.get('name', '').strip()
 
-            if not url:
-                return jsonify({"error": "URL is required"}), 400
-
-            # Add album to config
             from ..config import AlbumConfig
-            app.photoloop_config.albums.append(AlbumConfig(url=url, name=name))
+
+            if album_type == "local":
+                # Local directory
+                path = data.get('path', '').strip()
+                if not path:
+                    return jsonify({"error": "Path is required for local directories"}), 400
+
+                # Expand and validate path
+                expanded_path = os.path.expanduser(path)
+                if not os.path.exists(expanded_path):
+                    return jsonify({"error": f"Path does not exist: {path}"}), 400
+                if not os.path.isdir(expanded_path):
+                    return jsonify({"error": f"Path is not a directory: {path}"}), 400
+
+                app.photoloop_config.albums.append(AlbumConfig(
+                    path=path,
+                    name=name,
+                    type="local"
+                ))
+            else:
+                # Google Photos album
+                url = data.get('url', '').strip()
+                if not url:
+                    return jsonify({"error": "URL is required for Google Photos albums"}), 400
+
+                app.photoloop_config.albums.append(AlbumConfig(
+                    url=url,
+                    name=name,
+                    type="google_photos"
+                ))
+
             save_config(app.photoloop_config)
 
             if app.on_config_change:
@@ -484,11 +512,12 @@ def create_app(
 
     @app.route('/api/photos')
     def api_photos():
-        """Get list of cached photos."""
+        """Get list of cached photos, newest first."""
         if not app.cache_manager:
             return jsonify([])
 
         media = app.cache_manager.get_all_media()
+        # Reverse order so most recently added photos appear first
         return jsonify([
             {
                 "id": m.media_id,
@@ -499,7 +528,7 @@ def create_app(
                 "date": m.exif_date,
                 "path": m.local_path
             }
-            for m in media  # Return all photos
+            for m in reversed(media)
         ])
 
     @app.route('/api/photos/<media_id>/thumbnail')

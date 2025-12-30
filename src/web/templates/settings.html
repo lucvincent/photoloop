@@ -82,6 +82,9 @@
             </div>
 
             <h3>Album Sync</h3>
+            <p class="help-text" style="margin-bottom: 12px;">
+                Only enabled sources (marked "Show" in the Albums tab) will be synced.
+            </p>
             <div class="form-group" style="margin-bottom: 12px;">
                 <label class="checkbox-inline">
                     <input type="checkbox" id="update-all-captions">
@@ -104,20 +107,42 @@
 
         <!-- Albums Tab -->
         <section id="albums" class="tab-content">
-            <h2>Google Photos Albums</h2>
+            <h2>Photo Sources</h2>
 
-            <div class="form-group">
-                <label for="new-album-url">Add Album URL</label>
-                <input type="url" id="new-album-url" placeholder="https://photos.app.goo.gl/...">
+            <div class="source-type-tabs" style="display: flex; gap: 0; margin-bottom: 15px;">
+                <button class="source-tab active" data-source="google" style="flex: 1; padding: 10px; border: 1px solid var(--border); border-radius: 8px 0 0 8px; background: var(--sage-primary); color: white; cursor: pointer;">Google Photos</button>
+                <button class="source-tab" data-source="local" style="flex: 1; padding: 10px; border: 1px solid var(--border); border-left: none; border-radius: 0 8px 8px 0; background: var(--card-bg); color: var(--text-secondary); cursor: pointer;">Local Directory</button>
             </div>
-            <div class="form-group">
-                <label for="new-album-name">Album Name (optional)</label>
-                <input type="text" id="new-album-name" placeholder="My Album">
-            </div>
-            <button id="btn-add-album" class="btn btn-primary">Add Album</button>
 
-            <h3>Configured Albums</h3>
-            <p class="hint">Changes in album selection take effect immediately.</p>
+            <!-- Google Photos Input -->
+            <div id="google-input" class="source-input">
+                <div class="form-group">
+                    <label for="new-album-url">Album URL</label>
+                    <input type="url" id="new-album-url" placeholder="https://photos.app.goo.gl/...">
+                </div>
+                <div class="form-group">
+                    <label for="new-album-name">Album Name (optional)</label>
+                    <input type="text" id="new-album-name" placeholder="My Album">
+                </div>
+                <button id="btn-add-album" class="btn btn-primary">Add Google Album</button>
+            </div>
+
+            <!-- Local Directory Input -->
+            <div id="local-input" class="source-input" style="display: none;">
+                <div class="form-group">
+                    <label for="new-local-path">Directory Path</label>
+                    <input type="text" id="new-local-path" placeholder="/home/pi/photos">
+                    <p class="help-text" style="margin-top: 4px; font-size: 12px;">Enter the full path to a directory on this device.</p>
+                </div>
+                <div class="form-group">
+                    <label for="new-local-name">Display Name (optional)</label>
+                    <input type="text" id="new-local-name" placeholder="My Local Photos">
+                </div>
+                <button id="btn-add-local" class="btn btn-primary">Add Local Directory</button>
+            </div>
+
+            <h3>Configured Sources</h3>
+            <p class="hint">Changes in source selection take effect immediately.</p>
             <ul id="album-list" class="album-list">
                 <!-- Albums will be loaded here -->
             </ul>
@@ -150,7 +175,9 @@
                 <label for="display-order">Photo Order</label>
                 <select id="display-order">
                     <option value="random" {% if config.display.order == 'random' %}selected{% endif %}>Random</option>
-                    <option value="sequential" {% if config.display.order == 'sequential' %}selected{% endif %}>Sequential</option>
+                    <option value="recency_weighted" {% if config.display.order == 'recency_weighted' %}selected{% endif %}>Random with Recency Bias</option>
+                    <option value="alphabetical" {% if config.display.order == 'alphabetical' %}selected{% endif %}>Alphabetical (by filename)</option>
+                    <option value="chronological" {% if config.display.order == 'chronological' %}selected{% endif %}>Chronological (by date)</option>
                 </select>
             </div>
 
@@ -236,6 +263,7 @@
             </div>
 
             <h3>Cached Photos <span id="photo-grid-count" style="font-weight: normal; font-size: 14px; color: #81d4fa;"></span></h3>
+            <p style="margin: 5px 0 10px 0; font-size: 13px; color: #888;">Newest additions first</p>
             <div id="photo-grid" class="photo-grid" style="max-height: 500px; overflow-y: auto; border: 1px solid #333; border-radius: 8px; padding: 10px; background: #16213e;">
                 <!-- Thumbnails will be loaded here -->
             </div>
@@ -407,6 +435,24 @@
             }
         }
 
+        // Source type tab switching
+        document.querySelectorAll('.source-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.source-tab').forEach(t => {
+                    t.classList.remove('active');
+                    t.style.background = 'var(--card-bg)';
+                    t.style.color = 'var(--text-secondary)';
+                });
+                tab.classList.add('active');
+                tab.style.background = 'var(--sage-primary)';
+                tab.style.color = 'white';
+
+                const source = tab.dataset.source;
+                document.getElementById('google-input').style.display = source === 'google' ? 'block' : 'none';
+                document.getElementById('local-input').style.display = source === 'local' ? 'block' : 'none';
+            });
+        });
+
         // Load albums
         async function loadAlbums() {
             const albums = await apiCall('/api/albums');
@@ -415,7 +461,10 @@
             albums.forEach((album, index) => {
                 const li = document.createElement('li');
                 li.dataset.index = index;
-                const displayName = album.name || 'Unnamed album';
+                const displayName = album.name || 'Unnamed';
+                const isLocal = album.type === 'local';
+                const sourceLabel = isLocal ? 'Local' : 'Google';
+                const sourceLocation = isLocal ? album.path : album.url;
                 li.innerHTML = `
                     <label class="album-enabled-label">
                         <input type="checkbox" class="album-enabled-checkbox"
@@ -425,16 +474,17 @@
                     <div class="album-details">
                         <div class="album-name-row">
                             <span class="album-name-wrapper">
+                                <span class="source-badge" style="font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-right: 6px; background: ${isLocal ? '#6b7280' : 'var(--sage-primary)'}; color: white;">${sourceLabel}</span>
                                 <span class="album-name editable" data-index="${index}">${displayName}</span>
                                 <span class="album-photo-count">(${album.photo_count} photos)</span>
                             </span>
                             <span class="album-edit-wrapper hidden">
                                 <input type="text" class="album-name-input" data-index="${index}"
-                                       value="${album.name || ''}" placeholder="Album name">
+                                       value="${album.name || ''}" placeholder="Name">
                                 <button class="btn btn-small btn-save" data-index="${index}">Save</button>
                             </span>
                         </div>
-                        <div class="album-url">${album.url}</div>
+                        <div class="album-url" style="font-size: 12px; color: var(--text-secondary); word-break: break-all;">${sourceLocation}</div>
                     </div>
                     <button class="btn btn-small btn-danger" onclick="deleteAlbum(${index})">Delete</button>
                 `;
@@ -493,17 +543,39 @@
             });
         }
 
-        // Add album
+        // Add Google Photos album
         document.getElementById('btn-add-album').addEventListener('click', async () => {
-            const url = document.getElementById('new-album-url').value;
-            const name = document.getElementById('new-album-name').value;
+            const url = document.getElementById('new-album-url').value.trim();
+            const name = document.getElementById('new-album-name').value.trim();
             if (!url) {
                 alert('Please enter an album URL');
                 return;
             }
-            await apiCall('/api/albums', 'POST', { url, name });
+            const result = await apiCall('/api/albums', 'POST', { url, name, type: 'google_photos' });
+            if (result.error) {
+                alert('Error: ' + result.error);
+                return;
+            }
             document.getElementById('new-album-url').value = '';
             document.getElementById('new-album-name').value = '';
+            loadAlbums();
+        });
+
+        // Add local directory
+        document.getElementById('btn-add-local').addEventListener('click', async () => {
+            const path = document.getElementById('new-local-path').value.trim();
+            const name = document.getElementById('new-local-name').value.trim();
+            if (!path) {
+                alert('Please enter a directory path');
+                return;
+            }
+            const result = await apiCall('/api/albums', 'POST', { path, name, type: 'local' });
+            if (result.error) {
+                alert('Error: ' + result.error);
+                return;
+            }
+            document.getElementById('new-local-path').value = '';
+            document.getElementById('new-local-name').value = '';
             loadAlbums();
         });
 

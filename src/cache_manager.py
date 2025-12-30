@@ -63,16 +63,17 @@ class SyncProgress:
 @dataclass
 class CachedMedia:
     """Metadata for a cached media item."""
-    media_id: str                    # Hash of original URL
-    url: str                         # Original Google Photos URL
-    local_path: str                  # Path to cached file
+    media_id: str                    # Hash of original URL or file path
+    url: str                         # Original URL (Google Photos) or "file://" + path (local)
+    local_path: str                  # Path to cached/local file
     media_type: str                  # "photo" or "video"
     google_caption: Optional[str] = None    # Caption/description from Google Photos DOM
     embedded_caption: Optional[str] = None  # Caption from embedded EXIF/IPTC metadata
-    exif_date: Optional[str] = None  # ISO format date string
-    album_source: str = ""           # Which album it came from
-    download_date: str = ""          # When first downloaded
-    last_seen: str = ""              # Last time seen in album scrape
+    exif_date: Optional[str] = None  # ISO format date string from EXIF metadata
+    google_date: Optional[str] = None  # ISO format date string from Google Photos DOM
+    album_source: str = ""           # Which album/directory it came from
+    download_date: str = ""          # When first downloaded/indexed
+    last_seen: str = ""              # Last time seen in album scrape/directory scan
     content_hash: str = ""           # Hash of file content
     cached_faces: Optional[List[Dict[str, Any]]] = None  # Detected faces (separate from display_params)
     display_params: Optional[Dict[str, Any]] = None  # Cached display parameters
@@ -80,6 +81,8 @@ class CachedMedia:
     location: Optional[str] = None   # Reverse-geocoded location from EXIF GPS
     google_location: Optional[str] = None  # Location scraped from Google Photos info panel
     google_metadata_fetched: bool = False  # True once Google DOM metadata has been fetched (even if empty)
+    source_type: str = "google_photos"  # "google_photos" or "local"
+    file_mtime: Optional[str] = None    # For local files: ISO timestamp of file mtime for change detection
 
     def to_dict(self) -> dict:
         return {
@@ -90,6 +93,7 @@ class CachedMedia:
             "google_caption": self.google_caption,
             "embedded_caption": self.embedded_caption,
             "exif_date": self.exif_date,
+            "google_date": self.google_date,
             "album_source": self.album_source,
             "download_date": self.download_date,
             "last_seen": self.last_seen,
@@ -99,7 +103,9 @@ class CachedMedia:
             "deleted": self.deleted,
             "location": self.location,
             "google_location": self.google_location,
-            "google_metadata_fetched": self.google_metadata_fetched
+            "google_metadata_fetched": self.google_metadata_fetched,
+            "source_type": self.source_type,
+            "file_mtime": self.file_mtime
         }
 
     @classmethod
@@ -127,6 +133,7 @@ class CachedMedia:
             google_caption=google_caption,
             embedded_caption=embedded_caption,
             exif_date=data.get("exif_date"),
+            google_date=data.get("google_date"),
             album_source=data.get("album_source", ""),
             download_date=data.get("download_date", ""),
             last_seen=data.get("last_seen", ""),
@@ -136,7 +143,9 @@ class CachedMedia:
             deleted=data.get("deleted", False),
             location=data.get("location"),
             google_location=data.get("google_location"),
-            google_metadata_fetched=data.get("google_metadata_fetched", False)
+            google_metadata_fetched=data.get("google_metadata_fetched", False),
+            source_type=data.get("source_type", "google_photos"),  # Default for backward compat
+            file_mtime=data.get("file_mtime")
         )
 
 
@@ -145,9 +154,10 @@ class CacheManager:
     Manages the local cache of photos and videos.
 
     Handles:
-    - Downloading media from Google Photos
+    - Downloading media from Google Photos albums
+    - Indexing media from local directories
     - Storing metadata in JSON database
-    - Incremental sync (only download new/changed items)
+    - Incremental sync (only download/re-index new/changed items)
     - Cache size management
     - Providing media for display
     """
@@ -413,6 +423,97 @@ class CacheManager:
                 local_path.unlink()
             return None
 
+    # Supported file extensions for local directory scanning
+    PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'}
+    VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.webm'}
+
+    def _scan_local_directory(self, path: str, album_name: str) -> List[MediaItem]:
+        """
+        Scan a local directory recursively for photos and videos.
+
+        Args:
+            path: Path to the local directory.
+            album_name: Name to assign to items from this directory.
+
+        Returns:
+            List of MediaItem objects for found media files.
+        """
+        items: List[MediaItem] = []
+        expanded_path = os.path.expanduser(path)
+
+        if not os.path.isdir(expanded_path):
+            logger.warning(f"Local directory does not exist: {path}")
+            return items
+
+        # Track visited inodes to avoid infinite loops from symlinks
+        visited_inodes: Set[int] = set()
+
+        all_extensions = self.PHOTO_EXTENSIONS | self.VIDEO_EXTENSIONS
+
+        def scan_dir(dir_path: str) -> None:
+            """Recursively scan directory."""
+            try:
+                # Check for symlink loops
+                try:
+                    stat_info = os.stat(dir_path)
+                    if stat_info.st_ino in visited_inodes:
+                        logger.debug(f"Skipping already-visited directory (symlink loop): {dir_path}")
+                        return
+                    visited_inodes.add(stat_info.st_ino)
+                except OSError:
+                    return
+
+                entries = os.listdir(dir_path)
+            except PermissionError:
+                logger.warning(f"Permission denied accessing directory: {dir_path}")
+                return
+            except OSError as e:
+                logger.warning(f"Error accessing directory {dir_path}: {e}")
+                return
+
+            for entry in entries:
+                # Skip hidden files and directories
+                if entry.startswith('.'):
+                    continue
+
+                full_path = os.path.join(dir_path, entry)
+
+                try:
+                    if os.path.isdir(full_path):
+                        # Recurse into subdirectory
+                        scan_dir(full_path)
+                    elif os.path.isfile(full_path):
+                        # Check extension (case-insensitive)
+                        ext = os.path.splitext(entry)[1].lower()
+                        if ext in all_extensions:
+                            # Determine media type
+                            if ext in self.PHOTO_EXTENSIONS:
+                                media_type = "photo"
+                            else:
+                                media_type = "video"
+
+                            # Create MediaItem with file:// URL for unique identification
+                            abs_path = os.path.abspath(full_path)
+                            item = MediaItem(
+                                url=f"file://{abs_path}",
+                                media_type=media_type,
+                                caption=None,
+                                thumbnail_url=None,
+                                album_name=album_name
+                            )
+                            items.append(item)
+
+                except PermissionError:
+                    logger.warning(f"Permission denied accessing file: {full_path}")
+                except OSError as e:
+                    logger.warning(f"Error accessing {full_path}: {e}")
+
+        logger.info(f"Scanning local directory: {expanded_path}")
+        scan_dir(expanded_path)
+        logger.info(f"Found {len(items)} media files in {path}")
+
+        return items
+
     def sync(
         self,
         force_full: bool = False,
@@ -464,56 +565,98 @@ class CacheManager:
         # Get current time for last_seen
         now = datetime.now().isoformat()
 
-        # Scrape all configured albums
+        # Scrape all configured albums and scan local directories
         all_items: List[MediaItem] = []
+        # Track source type for each item (keyed by URL)
+        item_source_types: Dict[str, str] = {}
         albums_scraped_successfully = 0
-        total_albums = sum(1 for a in self.config.albums if a.url)
+        # Count enabled albums that need processing (Google Photos with URL or local with path)
+        total_albums = sum(
+            1 for a in self.config.albums
+            if a.enabled and ((a.type == "google_photos" and a.url) or (a.type == "local" and a.path))
+        )
         self._sync_progress.albums_total = total_albums
 
         for album in self.config.albums:
-            if not album.url:
+            # Skip disabled albums
+            if not album.enabled:
                 continue
-            try:
-                album_name = album.name or album.url
-                logger.info(f"Scraping album: {album_name}")
-                self._sync_progress.album_name = album_name
-                self._sync_progress.urls_found = 0
 
-                items = self._scraper.scrape_album(album.url)
-                for item in items:
-                    item.album_name = album_name  # Track which album this came from
-                all_items.extend(items)
-                albums_scraped_successfully += 1
-                self._sync_progress.albums_done = albums_scraped_successfully
+            try:
+                if album.type == "google_photos" and album.url:
+                    # Google Photos album - scrape via Selenium
+                    album_name = album.name or album.url
+                    logger.info(f"Scraping Google Photos album: {album_name}")
+                    self._sync_progress.album_name = album_name
+                    self._sync_progress.urls_found = 0
+
+                    items = self._scraper.scrape_album(album.url)
+                    for item in items:
+                        item.album_name = album_name
+                        item_source_types[item.url] = "google_photos"
+                    all_items.extend(items)
+                    albums_scraped_successfully += 1
+                    self._sync_progress.albums_done = albums_scraped_successfully
+
+                elif album.type == "local" and album.path:
+                    # Local directory - scan filesystem
+                    album_name = album.name or album.path
+                    logger.info(f"Scanning local directory: {album_name}")
+                    self._sync_progress.album_name = album_name
+                    self._sync_progress.urls_found = 0
+
+                    items = self._scan_local_directory(album.path, album_name)
+                    for item in items:
+                        item_source_types[item.url] = "local"
+                    all_items.extend(items)
+                    albums_scraped_successfully += 1
+                    self._sync_progress.albums_done = albums_scraped_successfully
+
             except Exception as e:
-                logger.error(f"Failed to scrape album {album.url}: {e}")
+                source_info = album.url if album.type == "google_photos" else album.path
+                logger.error(f"Failed to process album {source_info}: {e}")
                 stats["errors"] += 1
                 self._sync_progress.error_message = str(e)
 
-        logger.info(f"Found {len(all_items)} items in albums ({albums_scraped_successfully}/{total_albums} albums scraped)")
+        logger.info(f"Found {len(all_items)} items ({albums_scraped_successfully}/{total_albums} sources processed)")
         self._sync_progress.urls_found = len(all_items)
 
         # Track which URLs we've seen
         seen_urls: Set[str] = set()
 
-        # Calculate how many need downloading
-        items_to_download = 0
+        # Calculate how many need downloading/indexing
+        items_to_process = 0
         for item in all_items:
             media_id = self._get_media_id(item.url)
             if media_id not in self._media or force_full:
-                items_to_download += 1
+                items_to_process += 1
 
         self._sync_progress.stage = "downloading"
-        self._sync_progress.downloads_total = items_to_download
+        self._sync_progress.downloads_total = items_to_process
         self._sync_progress.downloads_done = 0
 
-        # Track URLs of newly downloaded photos for caption fetching
+        # Track URLs of newly downloaded photos for caption fetching (Google Photos only)
         new_photo_urls: Set[str] = set()
+
+        def _get_file_mtime(file_path: str) -> Optional[str]:
+            """Get file modification time as ISO string."""
+            try:
+                mtime = os.path.getmtime(file_path)
+                return datetime.fromtimestamp(mtime).isoformat()
+            except OSError:
+                return None
+
+        def _extract_local_path(url: str) -> Optional[str]:
+            """Extract local file path from file:// URL."""
+            if url.startswith("file://"):
+                return url[7:]  # Remove "file://" prefix
+            return None
 
         with self._lock:
             for item in all_items:
                 media_id = self._get_media_id(item.url)
                 seen_urls.add(item.url)
+                source_type = item_source_types.get(item.url, "google_photos")
 
                 existing = self._media.get(media_id)
 
@@ -524,15 +667,61 @@ class CacheManager:
                     if item.album_name:
                         existing.album_source = item.album_name
 
-                    # Check if Google caption changed (rarely populated during scrape)
-                    if item.caption and item.caption != existing.google_caption:
-                        existing.google_caption = item.caption
-                        stats["updated"] += 1
+                    # For local files, check if file has changed (mtime different)
+                    if source_type == "local":
+                        local_path = _extract_local_path(item.url)
+                        if local_path and os.path.exists(local_path):
+                            current_mtime = _get_file_mtime(local_path)
+                            if current_mtime and current_mtime != existing.file_mtime:
+                                # File has changed - re-extract metadata
+                                logger.info(f"Local file changed, re-extracting metadata: {local_path}")
+                                try:
+                                    metadata = self._metadata_extractor.extract(local_path)
+                                    if metadata.date_taken:
+                                        existing.exif_date = metadata.date_taken.isoformat()
+                                    existing.embedded_caption = metadata.caption
+                                    if metadata.gps_latitude and metadata.gps_longitude:
+                                        existing.location = reverse_geocode(
+                                            metadata.gps_latitude,
+                                            metadata.gps_longitude
+                                        )
+                                    existing.file_mtime = current_mtime
+                                    existing.content_hash = self._get_content_hash(local_path)
+                                    # Clear cached display params since image may have changed
+                                    existing.display_params = None
+                                    existing.cached_faces = None
+                                    stats["updated"] += 1
+                                except Exception as e:
+                                    logger.debug(f"Failed to re-extract metadata: {e}")
+                                    stats["unchanged"] += 1
+                            else:
+                                stats["unchanged"] += 1
+                        else:
+                            # Local file no longer exists - mark as deleted
+                            existing.deleted = True
+                            stats["deleted"] += 1
                     else:
-                        stats["unchanged"] += 1
+                        # Google Photos - check if caption changed (rarely populated during scrape)
+                        if item.caption and item.caption != existing.google_caption:
+                            existing.google_caption = item.caption
+                            stats["updated"] += 1
+                        else:
+                            stats["unchanged"] += 1
                 else:
-                    # New item - download it
-                    local_path = self._download_media(item.url, item.media_type, media_id)
+                    # New item - download or index it
+                    if source_type == "local":
+                        # Local file - use original path, no download
+                        local_path = _extract_local_path(item.url)
+                        if not local_path or not os.path.exists(local_path):
+                            logger.warning(f"Local file not found: {item.url}")
+                            stats["errors"] += 1
+                            self._sync_progress.downloads_done += 1
+                            continue
+                        file_mtime = _get_file_mtime(local_path)
+                    else:
+                        # Google Photos - download it
+                        local_path = self._download_media(item.url, item.media_type, media_id)
+                        file_mtime = None
 
                     if local_path:
                         # Extract metadata
@@ -558,7 +747,6 @@ class CacheManager:
                                 logger.debug(f"Failed to extract metadata: {e}")
 
                         # Create cache entry
-                        # Store embedded caption separately; Google caption fetched later
                         cached = CachedMedia(
                             media_id=media_id,
                             url=item.url,
@@ -570,6 +758,8 @@ class CacheManager:
                             download_date=now,
                             last_seen=now,
                             content_hash=self._get_content_hash(local_path),
+                            source_type=source_type,
+                            file_mtime=file_mtime,
                             display_params=None,  # Computed on demand
                             deleted=False,
                             location=location
@@ -578,38 +768,42 @@ class CacheManager:
                         stats["new"] += 1
                         self._sync_progress.downloads_done += 1
 
-                        # Always track new photos for Google Photos caption fetching
-                        if item.media_type == "photo":
+                        # Track new Google Photos items for caption fetching
+                        # (local files don't have Google captions)
+                        if item.media_type == "photo" and source_type == "google_photos":
                             new_photo_urls.add(item.url)
                     else:
                         stats["errors"] += 1
                         self._sync_progress.downloads_done += 1
 
         # Fetch captions from Google Photos for new photos or all photos if requested
+        # Note: Only applies to Google Photos items, not local files
         urls_needing_captions: Set[str] = set()
 
         if force_refetch_captions:
-            # Force re-fetch ALL photos (use when extraction logic changed)
-            # First reset the google_metadata_fetched flag for all photos
+            # Force re-fetch ALL Google Photos items (use when extraction logic changed)
+            # First reset the google_metadata_fetched flag for Google Photos items
             with self._lock:
                 for cached in self._media.values():
-                    if cached.media_type == "photo" and not cached.deleted:
+                    if (cached.media_type == "photo" and not cached.deleted
+                            and cached.source_type == "google_photos"):
                         cached.google_metadata_fetched = False
                         urls_needing_captions.add(cached.url)
                 self._save_metadata()
-            logger.info(f"Force re-fetching Google metadata for ALL {len(urls_needing_captions)} photos...")
+            logger.info(f"Force re-fetching Google metadata for ALL {len(urls_needing_captions)} Google Photos...")
         elif update_all_captions:
-            # Fetch metadata only for photos where google_metadata_fetched=False
+            # Fetch metadata only for Google Photos where google_metadata_fetched=False
             # Once fetched (even if empty), we never fetch again
             with self._lock:
                 for cached in self._media.values():
-                    if cached.media_type == "photo" and not cached.deleted:
+                    if (cached.media_type == "photo" and not cached.deleted
+                            and cached.source_type == "google_photos"):
                         if not cached.google_metadata_fetched:
                             urls_needing_captions.add(cached.url)
             if urls_needing_captions:
-                logger.info(f"Fetching Google metadata for {len(urls_needing_captions)} unfetched photos...")
+                logger.info(f"Fetching Google metadata for {len(urls_needing_captions)} unfetched Google Photos...")
             else:
-                logger.info("All photos already have Google metadata fetched")
+                logger.info("All Google Photos already have metadata fetched")
         else:
             # Only fetch captions for newly downloaded photos
             urls_needing_captions = new_photo_urls
@@ -624,9 +818,9 @@ class CacheManager:
             # Counter for batched saves
             captions_since_save = [0]  # Use list to allow modification in nested function
 
-            # Callback to save Google caption and location
+            # Callback to save Google caption, location, and date
             # Note: Caption precedence is now applied at display time, not sync time
-            def on_caption_found(url: str, google_caption: Optional[str], google_location: Optional[str] = None) -> None:
+            def on_caption_found(url: str, google_caption: Optional[str], google_location: Optional[str] = None, google_date: Optional[str] = None) -> None:
                 media_id = self._get_media_id(url)
                 with self._lock:
                     if media_id not in self._media:
@@ -641,8 +835,12 @@ class CacheManager:
                     if google_location and google_location != self._media[media_id].google_location:
                         self._media[media_id].google_location = google_location
 
+                    # Store Google date (used as fallback when EXIF date is missing)
+                    if google_date and google_date != self._media[media_id].google_date:
+                        self._media[media_id].google_date = google_date
+
                     # Mark as fetched - we've tried to get Google metadata for this photo
-                    # This is set even if caption/location are empty, so we don't retry
+                    # This is set even if caption/location/date are empty, so we don't retry
                     self._media[media_id].google_metadata_fetched = True
 
                     # Save to disk every 10 photos to avoid data loss
@@ -652,9 +850,9 @@ class CacheManager:
                         captions_since_save[0] = 0
                         logger.info(f"Saved metadata (captions updated: {stats['captions_updated']})")
 
-            # Group URLs by album for efficient fetching
+            # Group URLs by album for efficient fetching (only enabled Google Photos albums)
             for album in self.config.albums:
-                if not album.url:
+                if not album.enabled or not album.url or album.type != "google_photos":
                     continue
 
                 try:
@@ -769,9 +967,82 @@ class CacheManager:
 
             if self.config.display.order == "random":
                 random.shuffle(available)
+            elif self.config.display.order == "recency_weighted":
+                # Weighted random shuffle favoring recent photos
+                # Uses date priority: EXIF date > Google date > file mtime
+                cutoff_days = self.config.display.recency_cutoff_years * 365
+                min_weight = self.config.display.recency_min_weight
+                now = datetime.now()
+
+                def get_photo_date(mid: str) -> datetime:
+                    """Get photo date with fallback chain."""
+                    media = self._media[mid]
+                    # Try EXIF date first
+                    if media.exif_date:
+                        try:
+                            return datetime.fromisoformat(media.exif_date)
+                        except ValueError:
+                            pass
+                    # Fall back to Google Photos date
+                    if media.google_date:
+                        try:
+                            return datetime.fromisoformat(media.google_date)
+                        except ValueError:
+                            pass
+                    # Fall back to file modification time
+                    try:
+                        return datetime.fromtimestamp(os.path.getmtime(media.local_path))
+                    except (OSError, ValueError):
+                        return now  # Default to now if no date available
+
+                def get_weight(mid: str) -> float:
+                    """Calculate recency weight for a photo."""
+                    photo_date = get_photo_date(mid)
+                    age_days = (now - photo_date).days
+                    if age_days < 0:
+                        age_days = 0  # Future dates treated as today
+                    if age_days >= cutoff_days:
+                        return min_weight
+                    # Linear interpolation from 1.0 (today) to min_weight (at cutoff)
+                    return 1.0 - (1.0 - min_weight) * (age_days / cutoff_days)
+
+                # Weighted random sampling without replacement
+                weights = [get_weight(mid) for mid in available]
+                weighted_order = []
+                remaining = list(available)
+                remaining_weights = list(weights)
+                while remaining:
+                    # Select one item based on weights
+                    selected = random.choices(remaining, weights=remaining_weights, k=1)[0]
+                    weighted_order.append(selected)
+                    # Remove selected item
+                    idx = remaining.index(selected)
+                    remaining.pop(idx)
+                    remaining_weights.pop(idx)
+                available = weighted_order
+            elif self.config.display.order == "alphabetical":
+                # Sort by filename (basename of local_path)
+                available.sort(key=lambda mid: os.path.basename(self._media[mid].local_path).lower())
             else:
-                # Sequential - sort by date
-                available.sort(key=lambda mid: self._media[mid].exif_date or "")
+                # Chronological - sort by date with fallback chain:
+                # 1. EXIF date (from photo metadata)
+                # 2. Google Photos date (from DOM scraping)
+                # 3. File modification time
+                def get_sort_date(mid: str) -> str:
+                    media = self._media[mid]
+                    # Try EXIF date first
+                    if media.exif_date:
+                        return media.exif_date
+                    # Fall back to Google Photos date
+                    if media.google_date:
+                        return media.google_date
+                    # Fall back to file modification time
+                    try:
+                        mtime = os.path.getmtime(media.local_path)
+                        return datetime.fromtimestamp(mtime).isoformat()
+                    except (OSError, ValueError):
+                        return ""
+                available.sort(key=get_sort_date)
 
             self._playlist = available
             self._playlist_index = 0
@@ -907,9 +1178,13 @@ class CacheManager:
                 screen_width=screen_width,
                 screen_height=screen_height,
                 scaling_mode=self.config.scaling.mode,
+                smart_crop_method=self.config.scaling.smart_crop_method,
                 face_position=self.config.scaling.face_position,
                 fallback_crop=self.config.scaling.fallback_crop,
                 max_crop_percent=self.config.scaling.max_crop_percent,
+                saliency_threshold=self.config.scaling.saliency_threshold,
+                saliency_coverage=self.config.scaling.saliency_coverage,
+                crop_bias=self.config.scaling.crop_bias,
                 background_color=tuple(self.config.scaling.background_color),
                 ken_burns_enabled=self.config.ken_burns.enabled,
                 ken_burns_zoom_range=tuple(self.config.ken_burns.zoom_range),
