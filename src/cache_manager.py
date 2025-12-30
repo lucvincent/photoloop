@@ -705,11 +705,7 @@ class CacheManager:
                                     if metadata.date_taken:
                                         existing.exif_date = metadata.date_taken.isoformat()
                                     existing.embedded_caption = metadata.caption
-                                    if metadata.gps_latitude and metadata.gps_longitude:
-                                        existing.location = reverse_geocode(
-                                            metadata.gps_latitude,
-                                            metadata.gps_longitude
-                                        )
+                                    # Skip geocoding during sync - use extract_locations() later
                                     existing.file_mtime = current_mtime
                                     existing.content_hash = self._get_content_hash(local_path)
                                     # Clear cached display params since image may have changed
@@ -743,6 +739,7 @@ class CacheManager:
                             self._sync_progress.downloads_done += 1
                             continue
                         file_mtime = _get_file_mtime(local_path)
+                        logger.info(f"Indexing local file: {os.path.basename(local_path)}")
                     else:
                         # Google Photos - download it
                         local_path = self._download_media(item.url, item.media_type, media_id)
@@ -760,14 +757,11 @@ class CacheManager:
                                     exif_date = metadata.date_taken.isoformat()
                                 # Store embedded caption separately
                                 embedded_caption = metadata.caption
-                                # Extract location from GPS coordinates
-                                if metadata.gps_latitude and metadata.gps_longitude:
-                                    location = reverse_geocode(
-                                        metadata.gps_latitude,
-                                        metadata.gps_longitude
-                                    )
-                                    if location:
-                                        logger.debug(f"Geocoded location: {location}")
+                                # Skip geocoding during sync to avoid blocking
+                                # Location will be extracted later via extract_locations()
+                                # if metadata.gps_latitude and metadata.gps_longitude:
+                                #     location = reverse_geocode(...)
+                                pass
                             except Exception as e:
                                 logger.debug(f"Failed to extract metadata: {e}")
 
@@ -792,6 +786,10 @@ class CacheManager:
                         self._media[media_id] = cached
                         stats["new"] += 1
                         self._sync_progress.downloads_done += 1
+
+                        # Log progress for new items
+                        if self._sync_progress.downloads_done % 10 == 0 or source_type == "local":
+                            logger.info(f"Progress: {self._sync_progress.downloads_done}/{self._sync_progress.downloads_total} items processed")
 
                         # Track new Google Photos items for caption fetching
                         # (local files don't have Google captions)
