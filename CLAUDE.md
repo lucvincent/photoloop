@@ -150,6 +150,20 @@ sync:
 - Sync hourly starting at midnight: `sync_time: "00:00"`, `interval_minutes: 60`
 - Sync every 6 hours from service start: `sync_time:` (omit), `interval_minutes: 360`
 
+### Cache Settings
+
+```yaml
+cache:
+  directory: /var/lib/photoloop/cache
+  max_size_mb: 10000    # Maximum cache size (files deleted when exceeded)
+```
+
+**Cache behavior:**
+- Photos removed from albums are "soft deleted" (excluded from slideshow)
+- Actual files remain on disk until cache exceeds `max_size_mb`
+- When limit is exceeded, oldest soft-deleted files are removed first
+- Local directory photos are referenced in-place (not copied to cache)
+
 ### Photo Sources
 
 Albums can be Google Photos URLs or local directories:

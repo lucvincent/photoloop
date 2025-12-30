@@ -247,6 +247,12 @@ cache:
   # Maximum cache size in megabytes
   # When exceeded, oldest photos (by last_seen date) are removed
   #
+  # Deletion behavior:
+  #   - Photos removed from albums are "soft deleted" (excluded from slideshow)
+  #   - Actual files remain on disk until cache exceeds max_size_mb
+  #   - When limit is exceeded, soft-deleted files are removed first
+  #   - Local directory photos are referenced in-place (not copied to cache)
+  #
   # Sizing guide:
   #   - 1080p photos: ~2-5 MB each → 1000 MB ≈ 200-500 photos
   #   - 4K photos: ~8-15 MB each → 1000 MB ≈ 65-125 photos
