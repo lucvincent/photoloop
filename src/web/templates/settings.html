@@ -131,8 +131,11 @@
             <div id="local-input" class="source-input" style="display: none;">
                 <div class="form-group">
                     <label for="new-local-path">Directory Path</label>
-                    <input type="text" id="new-local-path" placeholder="/home/pi/photos">
-                    <p class="help-text" style="margin-top: 4px; font-size: 12px;">Enter the full path to a directory on this device.</p>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="new-local-path" placeholder="/home/pi/photos" style="flex: 1;">
+                        <button id="btn-browse-dir" class="btn btn-small" type="button" style="align-self: center;">Browse...</button>
+                    </div>
+                    <p class="help-text" style="margin-top: 4px; font-size: 12px;">Enter the full path or use Browse to select a directory.</p>
                 </div>
                 <div class="form-group">
                     <label for="new-local-name">Display Name (optional)</label>
@@ -146,6 +149,25 @@
             <ul id="album-list" class="album-list">
                 <!-- Albums will be loaded here -->
             </ul>
+
+            <!-- Directory Browser Modal -->
+            <div id="dir-browser-modal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <h3>Select Directory</h3>
+                    <div id="browser-path" class="browser-path">/home</div>
+                    <button id="btn-browser-up" class="btn btn-small" type="button">↑ Parent Directory</button>
+                    <ul id="browser-list" class="browser-list">
+                        <!-- Directories will be loaded here -->
+                    </ul>
+                    <p class="help-text" style="margin-top: 8px; font-size: 11px;">
+                        Photo counts shown are for that directory only. Subdirectories will be included when syncing.
+                    </p>
+                    <div class="modal-buttons">
+                        <button id="btn-browser-select" class="btn btn-primary" type="button">Select This Directory</button>
+                        <button id="btn-browser-cancel" class="btn" type="button">Cancel</button>
+                    </div>
+                </div>
+            </div>
         </section>
 
         <!-- Display Tab -->
@@ -577,6 +599,84 @@
             document.getElementById('new-local-path').value = '';
             document.getElementById('new-local-name').value = '';
             loadAlbums();
+        });
+
+        // Directory browser
+        let currentBrowsePath = null;
+
+        async function browsePath(path) {
+            try {
+                const result = await apiCall('/api/browse', 'POST', { path: path || undefined });
+                if (result.error) {
+                    alert('Error: ' + result.error);
+                    return;
+                }
+
+                currentBrowsePath = result.current_path;
+                document.getElementById('browser-path').textContent = result.current_path;
+
+                // Update parent button visibility
+                const parentBtn = document.getElementById('btn-browser-up');
+                parentBtn.style.display = result.parent_path ? 'inline-block' : 'none';
+
+                // Populate directory list
+                const list = document.getElementById('browser-list');
+                list.innerHTML = '';
+
+                if (result.items.length === 0) {
+                    const li = document.createElement('li');
+                    li.style.color = 'var(--text-muted)';
+                    li.style.fontStyle = 'italic';
+                    li.textContent = 'No subdirectories';
+                    list.appendChild(li);
+                } else {
+                    for (const item of result.items) {
+                        const li = document.createElement('li');
+                        let text = `📁 ${item.name}`;
+                        if (item.photo_count !== undefined) {
+                            text += `<span class="photo-count">(${item.photo_count} photos)</span>`;
+                        }
+                        li.innerHTML = text;
+                        li.addEventListener('click', () => browsePath(item.path));
+                        list.appendChild(li);
+                    }
+                }
+            } catch (e) {
+                alert('Error browsing: ' + e.message);
+            }
+        }
+
+        // Browse button - open modal
+        document.getElementById('btn-browse-dir').addEventListener('click', () => {
+            document.getElementById('dir-browser-modal').style.display = 'flex';
+            const currentPath = document.getElementById('new-local-path').value.trim();
+            browsePath(currentPath || null);
+        });
+
+        // Parent directory button
+        document.getElementById('btn-browser-up').addEventListener('click', () => {
+            if (currentBrowsePath && currentBrowsePath !== '/') {
+                const parent = currentBrowsePath.substring(0, currentBrowsePath.lastIndexOf('/')) || '/';
+                browsePath(parent);
+            }
+        });
+
+        // Select button - use current path
+        document.getElementById('btn-browser-select').addEventListener('click', () => {
+            document.getElementById('new-local-path').value = currentBrowsePath;
+            document.getElementById('dir-browser-modal').style.display = 'none';
+        });
+
+        // Cancel button - close modal
+        document.getElementById('btn-browser-cancel').addEventListener('click', () => {
+            document.getElementById('dir-browser-modal').style.display = 'none';
+        });
+
+        // Close modal on background click
+        document.getElementById('dir-browser-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'dir-browser-modal') {
+                document.getElementById('dir-browser-modal').style.display = 'none';
+            }
         });
 
         // Delete album

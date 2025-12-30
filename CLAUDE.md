@@ -185,6 +185,25 @@ albums:
 
 Local directories are scanned recursively. EXIF metadata (date, GPS location, captions) is extracted and cached.
 
+### Local Albums Settings
+
+Control the directory browser in the web UI:
+
+```yaml
+local_albums:
+  enabled: true                              # Allow adding local directories (default: true)
+  browse_paths: ["/home", "/media", "/mnt"]  # Paths users can browse
+  show_photo_counts: true                    # Show image count per directory (slower)
+```
+
+**Security notes:**
+- Set `enabled: false` to completely disable local directory support
+- `browse_paths` restricts which directories users can browse via the web UI
+- Hidden directories (starting with `.`) are never shown
+- Only directories within `browse_paths` can be selected
+
+**Note:** Photo counts in the browser show only files in that directory, not subdirectories. However, when a directory is added as an album, all subdirectories are scanned recursively.
+
 ### Display Settings
 
 ```yaml

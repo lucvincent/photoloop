@@ -182,6 +182,10 @@ def create_app(
             from ..config import AlbumConfig
 
             if album_type == "local":
+                # Check if local albums are enabled
+                if not app.photoloop_config.local_albums.enabled:
+                    return jsonify({"error": "Local albums are disabled"}), 403
+
                 # Local directory
                 path = data.get('path', '').strip()
                 if not path:
@@ -280,6 +284,92 @@ def create_app(
         except Exception as e:
             logger.error(f"Error setting album name: {e}")
             return jsonify({"error": str(e)}), 500
+
+    @app.route('/api/local-albums/config', methods=['GET'])
+    def api_local_albums_config():
+        """Get local albums configuration."""
+        return jsonify({
+            "enabled": app.photoloop_config.local_albums.enabled,
+            "show_photo_counts": app.photoloop_config.local_albums.show_photo_counts
+        })
+
+    @app.route('/api/browse', methods=['POST'])
+    def api_browse_directory():
+        """Browse directories for local album selection."""
+        # Check if local albums are enabled
+        if not app.photoloop_config.local_albums.enabled:
+            return jsonify({"error": "Local albums are disabled"}), 403
+
+        try:
+            data = request.get_json() or {}
+            path = data.get('path', os.path.expanduser('~')).strip()
+
+            # Expand path (handle ~ and relative paths)
+            expanded = os.path.abspath(os.path.expanduser(path))
+
+            # Security: verify path is under allowed browse_paths
+            allowed = False
+            for base in app.photoloop_config.local_albums.browse_paths:
+                base_abs = os.path.abspath(os.path.expanduser(base))
+                if expanded.startswith(base_abs) or expanded == base_abs:
+                    allowed = True
+                    break
+
+            if not allowed:
+                return jsonify({"error": "Access denied: path not in allowed browse paths"}), 403
+
+            if not os.path.exists(expanded):
+                return jsonify({"error": f"Path not found: {path}"}), 404
+
+            if not os.path.isdir(expanded):
+                return jsonify({"error": f"Not a directory: {path}"}), 400
+
+            # List directories (skip hidden)
+            items = []
+            try:
+                for name in sorted(os.listdir(expanded)):
+                    if name.startswith('.'):
+                        continue
+                    full_path = os.path.join(expanded, name)
+                    if os.path.isdir(full_path):
+                        item = {"name": name, "path": full_path}
+                        if app.photoloop_config.local_albums.show_photo_counts:
+                            item["photo_count"] = _count_images(full_path)
+                        items.append(item)
+            except PermissionError:
+                return jsonify({"error": "Permission denied"}), 403
+
+            # Calculate parent path (but don't go above allowed roots)
+            parent_path = os.path.dirname(expanded)
+            parent_allowed = False
+            for base in app.photoloop_config.local_albums.browse_paths:
+                base_abs = os.path.abspath(os.path.expanduser(base))
+                if parent_path.startswith(base_abs) or parent_path == base_abs:
+                    parent_allowed = True
+                    break
+
+            return jsonify({
+                "current_path": expanded,
+                "parent_path": parent_path if parent_allowed else None,
+                "items": items
+            })
+
+        except Exception as e:
+            logger.error(f"Error browsing directory: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    def _count_images(directory: str) -> int:
+        """Count image files in a directory (non-recursive)."""
+        IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.bmp', '.tiff'}
+        count = 0
+        try:
+            for name in os.listdir(directory):
+                ext = os.path.splitext(name.lower())[1]
+                if ext in IMAGE_EXTENSIONS:
+                    count += 1
+        except (PermissionError, OSError):
+            pass
+        return count
 
     @app.route('/api/sync', methods=['POST'])
     def api_sync():

@@ -11,6 +11,15 @@
 # ============================================================
 
 # ------------------------------------------------------------
+# Local Albums Settings - Directory browser for local photos
+# ------------------------------------------------------------
+# Control whether users can add local directories via the web UI
+local_albums:
+  enabled: true                              # Allow adding local directories
+  browse_paths: ["/home", "/media", "/mnt"]  # Paths users can browse
+  show_photo_counts: true                    # Show image count (slower browsing)
+
+# ------------------------------------------------------------
 # Albums - List of public Google Photos album URLs to display
 # ------------------------------------------------------------
 # Add one or more public (world-visible) Google Photos albums.

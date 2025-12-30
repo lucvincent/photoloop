@@ -169,6 +169,14 @@ class WebConfig:
 
 
 @dataclass
+class LocalAlbumsConfig:
+    """Local album browser settings."""
+    enabled: bool = True  # Allow adding local directories
+    browse_paths: List[str] = field(default_factory=lambda: ["/home", "/media", "/mnt"])
+    show_photo_counts: bool = True  # Show image count in browser (slower)
+
+
+@dataclass
 class PhotoLoopConfig:
     """Main configuration class."""
     albums: List[AlbumConfig] = field(default_factory=list)
@@ -180,6 +188,7 @@ class PhotoLoopConfig:
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    local_albums: LocalAlbumsConfig = field(default_factory=LocalAlbumsConfig)
 
     # Runtime state (not persisted)
     config_path: Optional[str] = None
