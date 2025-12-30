@@ -889,13 +889,25 @@ class CacheManager:
         #   - Complete failures (0 items found)
         #   - Partial failures (only a few items scraped before timeout)
         #   - Normal changes (some photos added/removed from album)
+        #
+        # Important: Only mark items from ENABLED albums as deleted.
+        # Items from disabled albums should be preserved (not scraped, not deleted).
         with self._lock:
+            # Get names of enabled albums
+            enabled_album_names = {
+                album.name or (album.url if album.type == "google_photos" else album.path)
+                for album in self.config.albums
+                if album.enabled
+            }
+
             current_cached_count = sum(1 for c in self._media.values() if not c.deleted)
             min_required = max(1, int(current_cached_count * 0.5))  # At least 50% of current
 
             if albums_scraped_successfully > 0 and len(all_items) >= min_required:
                 for media_id, cached in self._media.items():
-                    if cached.url not in seen_urls and not cached.deleted:
+                    # Only consider deletion for items from enabled albums
+                    if (cached.url not in seen_urls and not cached.deleted
+                            and cached.album_source in enabled_album_names):
                         cached.deleted = True
                         stats["deleted"] += 1
             elif total_albums > 0:
