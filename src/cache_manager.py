@@ -850,10 +850,29 @@ class CacheManager:
                         captions_since_save[0] = 0
                         logger.info(f"Saved metadata (captions updated: {stats['captions_updated']})")
 
-            # Group URLs by album for efficient fetching (only enabled Google Photos albums)
+            # Group URLs by album for efficient fetching
+            # Build mapping: album_name -> set of URLs belonging to that album
+            urls_by_album: Dict[str, Set[str]] = {}
+            with self._lock:
+                for url in urls_needing_captions:
+                    media_id = self._get_media_id(url)
+                    if media_id in self._media:
+                        album_name = self._media[media_id].album_source
+                        if album_name not in urls_by_album:
+                            urls_by_album[album_name] = set()
+                        urls_by_album[album_name].add(url)
+
             for album in self.config.albums:
                 if not album.enabled or not album.url or album.type != "google_photos":
                     continue
+
+                # Only fetch metadata for photos belonging to THIS album
+                album_urls = urls_by_album.get(album.name, set())
+                if not album_urls:
+                    logger.debug(f"No metadata to fetch for album: {album.name}")
+                    continue
+
+                logger.info(f"Fetching metadata for {len(album_urls)} photos from album: {album.name}")
 
                 try:
                     # Fetch captions for photos in this album
@@ -863,7 +882,7 @@ class CacheManager:
 
                     google_captions = self._scraper.fetch_captions(
                         album.url,
-                        urls_needing_captions,
+                        album_urls,
                         progress_callback=caption_progress,
                         caption_found_callback=on_caption_found
                     )
