@@ -29,7 +29,7 @@
         <header>
             <div class="logo-title">
                 <img src="{{ url_for('static', filename='logo.svg') }}" alt="PhotoLoop">
-                <h1>PhotoLoop Dashboard</h1>
+                <h1>PhotoLoop<span class="title-dashboard"> Dashboard</span></h1>
             </div>
             <div id="status-indicator" class="status">Loading...</div>
         </header>
@@ -46,9 +46,9 @@
         <section id="control" class="tab-content active">
             <h2>Photo Control</h2>
             <div class="control-buttons" id="photo-control-buttons" style="margin-bottom: 8px;">
-                <button id="btn-prev" class="btn">Previous</button>
-                <button id="btn-pause" class="btn btn-primary">Pause</button>
-                <button id="btn-next" class="btn">Next</button>
+                <button id="btn-prev" class="btn btn-primary photo-control-btn"><span class="btn-icon">⏮</span><span class="btn-text">Previous</span></button>
+                <button id="btn-pause" class="btn btn-primary photo-control-btn"><span class="btn-icon">⏸</span><span class="btn-text">Pause</span></button>
+                <button id="btn-next" class="btn btn-primary photo-control-btn"><span class="btn-icon">⏭</span><span class="btn-text">Next</span></button>
             </div>
             <p class="help-text" id="photo-control-status">
                 Use these controls to navigate photos or pause the slideshow on a specific photo.
@@ -449,13 +449,13 @@
                     const pauseBtn = document.getElementById('btn-pause');
                     const statusEl = document.getElementById('photo-control-status');
                     if (status.photo_control.paused) {
-                        pauseBtn.textContent = 'Resume';
-                        pauseBtn.className = 'btn btn-success';
+                        pauseBtn.innerHTML = '<span class="btn-icon">▶</span><span class="btn-text">Resume</span>';
+                        pauseBtn.className = 'btn btn-primary photo-control-btn';
                         statusEl.innerHTML = '<strong style="color: var(--warning);">Slideshow paused.</strong> Click Resume to continue auto-advance.';
                         statusEl.style.color = 'var(--text-secondary)';
                     } else {
-                        pauseBtn.textContent = 'Pause';
-                        pauseBtn.className = 'btn btn-primary';
+                        pauseBtn.innerHTML = '<span class="btn-icon">⏸</span><span class="btn-text">Pause</span>';
+                        pauseBtn.className = 'btn btn-primary photo-control-btn';
                         statusEl.textContent = 'Use these controls to navigate photos or pause the slideshow on a specific photo.';
                         statusEl.style.color = '';
                     }

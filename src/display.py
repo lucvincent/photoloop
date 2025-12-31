@@ -245,6 +245,24 @@ class Display:
         """
         self._location_update_callback = callback
 
+    def notify_metadata_updated(self, media_id: str) -> None:
+        """
+        Notify display that metadata was updated for a specific media item.
+
+        If the media_id matches the currently displayed photo, triggers a redraw
+        so the overlay reflects the new caption/location/date immediately.
+
+        This allows incremental caption updates during sync - as each caption is
+        fetched, it becomes visible on the currently displayed photo without
+        waiting for the full sync to complete.
+
+        Args:
+            media_id: The media ID that was updated.
+        """
+        if self._current_media and self._current_media.media_id == media_id:
+            logger.debug(f"Metadata updated for current photo {media_id}, triggering redraw")
+            self._needs_redraw = True
+
     def _lazy_geocode_if_needed(self) -> None:
         """
         Trigger background geocoding for current photo if it has GPS but no location.
@@ -359,6 +377,10 @@ class Display:
         # Turn display back on if it was off
         if not self._display_powered:
             self._set_display_power(True)
+            # Give display a moment to stabilize after power on
+            time.sleep(0.5)
+            # Recreate renderer to ensure clean state after display power cycle
+            self._recreate_renderer()
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
@@ -902,6 +924,151 @@ class Display:
         date_y = time_y + time_h + 20
         date_texture.draw(dstrect=(date_x, date_y, date_w, date_h))
 
+    def _recreate_renderer(self) -> None:
+        """
+        Recreate the SDL2 renderer to ensure clean state.
+
+        This is needed after display power cycles, as the GPU/compositor
+        state may become inconsistent on some systems (especially Wayland).
+        """
+        logger.info("Recreating SDL2 renderer after display power cycle")
+
+        # Clear any existing textures (they'll be invalid after renderer recreation)
+        self._current_texture = None
+        self._next_texture = None
+        self._source_texture = None
+
+        # Delete old renderer
+        try:
+            del self._renderer
+        except Exception as e:
+            logger.warning(f"Error deleting old renderer: {e}")
+
+        # Query current window size
+        self.screen_width, self.screen_height = self._window.size
+        logger.info(f"Window size after power cycle: {self.screen_width}x{self.screen_height}")
+
+        # Create new renderer
+        self._renderer = sdl2.Renderer(self._window, accelerated=True, vsync=True)
+
+        # Log new renderer state
+        try:
+            viewport = self._renderer.get_viewport()
+            logical = self._renderer.logical_size
+            scale = self._renderer.scale
+            logger.info(
+                f"New renderer state - viewport: {viewport}, "
+                f"logical: {logical}, scale: {scale}"
+            )
+        except Exception as e:
+            logger.debug(f"Could not get new renderer state: {e}")
+
+        # Update image processor if dimensions changed
+        self._processor = ImageProcessor(
+            screen_width=self.screen_width,
+            screen_height=self.screen_height,
+            scaling_mode=self.config.scaling.mode,
+            smart_crop_method=self.config.scaling.smart_crop_method,
+            face_position=self.config.scaling.face_position,
+            fallback_crop=self.config.scaling.fallback_crop,
+            max_crop_percent=self.config.scaling.max_crop_percent,
+            saliency_threshold=self.config.scaling.saliency_threshold,
+            saliency_coverage=self.config.scaling.saliency_coverage,
+            crop_bias=self.config.scaling.crop_bias,
+            background_color=tuple(self.config.scaling.background_color),
+            ken_burns_enabled=self.config.ken_burns.enabled,
+            ken_burns_zoom_range=tuple(self.config.ken_burns.zoom_range),
+            ken_burns_pan_speed=self.config.ken_burns.pan_speed,
+            ken_burns_randomize=self.config.ken_burns.randomize
+        )
+
+        logger.info("Renderer recreated successfully")
+
+    def _refresh_display_dimensions(self) -> None:
+        """
+        Re-query window dimensions and update if changed.
+
+        This is needed after display power on, as some display managers
+        may alter window state during power transitions.
+        """
+        new_width, new_height = self._window.size
+
+        # Log current renderer state for debugging
+        try:
+            viewport = self._renderer.get_viewport()
+            logical = self._renderer.logical_size
+            scale = self._renderer.scale
+            logger.info(
+                f"Renderer state - window: {new_width}x{new_height}, "
+                f"viewport: {viewport}, logical: {logical}, scale: {scale}"
+            )
+        except Exception as e:
+            logger.debug(f"Could not get renderer state: {e}")
+
+        # Check if dimensions look suspiciously small (possible compositor glitch)
+        # Common symptom: window reports half its expected size
+        min_expected_width = 800  # Reasonable minimum for a photo frame
+        if new_width < min_expected_width or new_height < min_expected_width:
+            logger.warning(
+                f"Window dimensions look wrong ({new_width}x{new_height}), "
+                "attempting to restore fullscreen"
+            )
+            try:
+                # Try to restore fullscreen mode
+                # Setting fullscreen property should force the window back to native resolution
+                self._window.set_fullscreen(True)
+                time.sleep(0.1)  # Brief delay for mode change
+                new_width, new_height = self._window.size
+                logger.info(f"Restored fullscreen: {new_width}x{new_height}")
+            except Exception as e:
+                logger.error(f"Failed to restore fullscreen: {e}")
+
+        # Always reset the viewport to full window size
+        # This fixes issues where the renderer's viewport gets corrupted
+        try:
+            self._renderer.set_viewport(None)  # None = reset to full window
+            logger.debug("Reset renderer viewport to full window")
+        except Exception as e:
+            logger.debug(f"Could not reset viewport: {e}")
+
+        # Reset logical size if it's set (should be None for 1:1 pixel mapping)
+        try:
+            if self._renderer.logical_size != (0, 0):
+                # logical_size of (0,0) means "use window size"
+                # We can't set it directly to None, but we can try to clear it
+                logger.warning(f"Renderer has non-default logical size: {self._renderer.logical_size}")
+        except Exception as e:
+            logger.debug(f"Could not check logical size: {e}")
+
+        if new_width != self.screen_width or new_height != self.screen_height:
+            logger.warning(
+                f"Display dimensions changed: {self.screen_width}x{self.screen_height} -> "
+                f"{new_width}x{new_height}"
+            )
+            self.screen_width = new_width
+            self.screen_height = new_height
+
+            # Update image processor with new dimensions
+            self._processor = ImageProcessor(
+                screen_width=self.screen_width,
+                screen_height=self.screen_height,
+                scaling_mode=self.config.scaling.mode,
+                smart_crop_method=self.config.scaling.smart_crop_method,
+                face_position=self.config.scaling.face_position,
+                fallback_crop=self.config.scaling.fallback_crop,
+                max_crop_percent=self.config.scaling.max_crop_percent,
+                saliency_threshold=self.config.scaling.saliency_threshold,
+                saliency_coverage=self.config.scaling.saliency_coverage,
+                crop_bias=self.config.scaling.crop_bias,
+                background_color=tuple(self.config.scaling.background_color),
+                ken_burns_enabled=self.config.ken_burns.enabled,
+                ken_burns_zoom_range=tuple(self.config.ken_burns.zoom_range),
+                ken_burns_pan_speed=self.config.ken_burns.pan_speed,
+                ken_burns_randomize=self.config.ken_burns.randomize
+            )
+
+            logger.info(f"Updated display dimensions to {self.screen_width}x{self.screen_height}")
+
     def _set_display_power(self, on: bool) -> None:
         """
         Control physical display power.
@@ -915,6 +1082,12 @@ class Display:
             on: True to turn display on, False to turn off.
         """
         self._display_powered = on
+
+        # TEMPORARILY DISABLED: DDC power control causes resolution issues on Wayland
+        # when the display powers back on. Skip DDC and just use black screen.
+        # TODO: Investigate Wayland compositor interaction with DDC
+        logger.info(f"Display power {'on' if on else 'off'} (DDC disabled - using black screen)")
+        return
 
         # Method 1: Try DDC/CI (for monitors) - most reliable for computer monitors
         # VCP code 0xD6 = Power mode: 1=on, 4=off/standby
@@ -1007,6 +1180,9 @@ class Display:
         elif mode == DisplayMode.SLIDESHOW:
             if self.mode != DisplayMode.SLIDESHOW:
                 self._needs_redraw = True
+                # Verify display dimensions when coming back to slideshow
+                # (display manager may have altered window during off-hours)
+                self._refresh_display_dimensions()
             self.mode = DisplayMode.SLIDESHOW
 
     def is_transition_complete(self) -> bool:

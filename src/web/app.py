@@ -288,6 +288,41 @@ def create_app(
             logger.error(f"Error setting album name: {e}")
             return jsonify({"error": str(e)}), 500
 
+    @app.route('/api/albums/<int:index>/reset', methods=['POST'])
+    def api_reset_album_metadata(index: int):
+        """Reset metadata for an album so it can be re-fetched."""
+        try:
+            if not app.cache_manager:
+                return jsonify({"error": "Cache manager not available"}), 503
+
+            if not (0 <= index < len(app.photoloop_config.albums)):
+                return jsonify({"error": "Invalid album index"}), 400
+
+            album = app.photoloop_config.albums[index]
+            album_name = album.name
+
+            data = request.get_json() or {}
+            clear_captions = data.get('captions', True)
+            clear_locations = data.get('locations', True)
+
+            count = app.cache_manager.reset_album_metadata(
+                album_name,
+                clear_captions=clear_captions,
+                clear_locations=clear_locations
+            )
+
+            return jsonify({
+                "success": True,
+                "album": album_name,
+                "photos_reset": count,
+                "captions_cleared": clear_captions,
+                "locations_cleared": clear_locations
+            })
+
+        except Exception as e:
+            logger.error(f"Error resetting album metadata: {e}")
+            return jsonify({"error": str(e)}), 500
+
     @app.route('/api/local-albums/config', methods=['GET'])
     def api_local_albums_config():
         """Get local albums configuration."""

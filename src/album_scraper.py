@@ -842,10 +842,15 @@ class AlbumScraper:
         """
         Extract caption, location, and date from the photo detail view.
 
-        Uses targeted DOM selectors based on Google Photos' structure:
-        - Location: div.R9U8ab inside [aria-label="Edit location"]
-        - Description: div.oBMhZb (filtered to exclude metadata)
-        - Date: Text matching date patterns in the info panel
+        Uses a ROBUST CONTENT-BASED approach that doesn't rely on fragile CSS
+        class names. Instead of looking for specific classes like 'div.oBMhZb',
+        we gather all text from the info panel and identify each piece by its
+        content pattern:
+        - Date: Text matching date patterns (e.g., "Jan 15, 2024")
+        - Location: Text from location UI area, or geographic-looking text
+        - Caption: User text that isn't metadata, dates, locations, or UI labels
+
+        This approach is resilient to Google Photos DOM structure changes.
 
         Args:
             driver: WebDriver with photo detail view open.
@@ -876,113 +881,198 @@ class AlbumScraper:
                 ActionChains(driver).send_keys('i').perform()
                 time.sleep(1.5)  # Allow time for info panel to load
 
-            # Extract location using targeted selector
-            # Location is inside an element with aria-label="Edit location"
-            loc_containers = driver.find_elements(
-                By.CSS_SELECTOR,
-                "[aria-label='Edit location'] div.R9U8ab"
-            )
-            for elem in loc_containers:
-                text = elem.text
-                if text and text.strip():
-                    location = text.strip()
-                    # Skip placeholder text that indicates no real location
-                    if location.lower() in ['unknown location', 'add location']:
-                        continue
-                    result['location'] = location
-                    logger.debug(f"Found location via DOM: {result['location']}")
-                    break
+            # =================================================================
+            # STEP 1: Gather ALL text from info panel using multiple selectors
+            # =================================================================
+            # Use broad selectors to capture text regardless of class names
+            text_selectors = [
+                # Specific selectors (may break but worth trying)
+                'div.qURWqc',               # Caption area (Dec 2024)
+                'div.oBMhZb',               # Previous caption area
+                'div.R9U8ab',               # Info text elements
+                'div.zE2Vqb div',           # Caption container
+                # Broader selectors (more resilient)
+                '[role="listitem"] span',   # List items in info panel
+                '[aria-label="Edit location"] *',  # Location area
+                '[aria-label*="description"] *',   # Description area
+            ]
 
-            # Extract date from info panel
-            # Google Photos displays dates in formats like:
-            # - "Jan 15, 2024" or "January 15, 2024"
-            # - "Mon, Jan 15, 2024" (with day of week)
-            # - Sometimes with time like "Jan 15, 2024 8:13 AM"
-            # Date patterns to match (month names, day, year)
+            all_texts = set()
+            for selector in text_selectors:
+                try:
+                    for elem in driver.find_elements(By.CSS_SELECTOR, selector):
+                        text = elem.text
+                        if text and text.strip():
+                            all_texts.add(text.strip())
+                except Exception:
+                    continue  # Skip invalid selectors
+
+            # Also try to get location specifically from aria-labeled element
+            # This is more stable than class names
+            location_from_aria = None
+            try:
+                loc_area = driver.find_elements(By.CSS_SELECTOR, "[aria-label='Edit location']")
+                if loc_area:
+                    loc_text = loc_area[0].text.strip()
+                    if loc_text and loc_text.lower() not in ['add location', 'unknown location']:
+                        location_from_aria = loc_text
+            except Exception:
+                pass
+
+            # =================================================================
+            # STEP 2: Define patterns to identify content types
+            # =================================================================
+
+            # Date pattern - matches "Jan 15, 2024", "January 15, 2024", etc.
             date_pattern = re.compile(
-                r'(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+)?'  # Optional day of week
+                r'(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+)?'  # Optional day
                 r'(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|'
                 r'Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
-                r'\s+(\d{1,2}),?\s+(\d{4})',  # Month day, year
+                r'\s+(\d{1,2}),?\s+(\d{4})',
                 re.IGNORECASE
             )
 
-            # Look in all text elements in the info panel
-            # Date is typically in div.R9U8ab elements (same as location/filename)
-            info_elements = driver.find_elements(By.CSS_SELECTOR, 'div.R9U8ab, div.oBMhZb, [role="listitem"] span')
-            for elem in info_elements:
-                text = elem.text
-                if not text:
-                    continue
+            # Metadata patterns - camera settings, dimensions, filenames, UI text
+            metadata_patterns = [
+                r'^\d{1,2}:\d{2}',           # Time like "8:13 AM"
+                r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b',  # Day of week alone
+                r'^GMT[+-]',                 # Timezone
+                r'^ƒ/',                      # Aperture
+                r'^\d+(\.\d+)?mm$',          # Focal length
+                r'^ISO\s?\d+',               # ISO
+                r'^\d+/\d+s?$',              # Shutter speed
+                r'^\d+(\.\d+)?\s*MP$',       # Megapixels
+                r'^\d+\s*[×x]\s*\d+$',       # Dimensions
+                r'^Ultra HDR',               # HDR mode
+                r'^Shared by\b',             # Sharing info
+                r'^Map data ©',              # Map attribution
+                r'\.(jpe?g|png|heic|gif|webp|mp4|mov)$',  # Filename extensions
+                r'^PXL_\d',                  # Pixel filename
+                r'^IMG_\d',                  # Common filename
+                r'^DSC[_\d]',                # Camera filename
+                r'^DCIM',                    # Camera folder
+                r'^Add a description$',      # Placeholder
+                r'^Add location$',           # Placeholder
+                r'^Unknown location$',       # Placeholder
+                r'^Details$',                # UI label
+                r'^Info$',                   # UI label
+                # Camera/device names (shown in info panel)
+                r'^Google Pixel',            # Google phones
+                r'^Pixel \d',                # Pixel phones
+                r'^iPhone',                  # Apple phones
+                r'^Samsung Galaxy',          # Samsung phones
+                r'^Galaxy [A-Z]',            # Samsung phones
+                r'^Canon EOS',               # Canon cameras
+                r'^Nikon [DZ]',              # Nikon cameras
+                r'^Sony [A-Z]',              # Sony cameras
+                r'^OLYMPUS',                 # Olympus cameras
+                r'^FUJIFILM',                # Fujifilm cameras
+                r'^Panasonic',               # Panasonic cameras
+                r'^GoPro',                   # GoPro cameras
+                r'^DJI',                     # DJI drones
+                r'DIGITAL CAMERA$',          # Generic camera tag
+            ]
+            metadata_re = re.compile('|'.join(metadata_patterns), re.IGNORECASE)
+
+            def is_metadata_or_ui(text: str) -> bool:
+                """Check if text is metadata/UI rather than user content."""
+                text = text.strip()
+                # Check the text itself
+                if metadata_re.search(text):
+                    return True
+                # Check each line for multi-line text
+                for line in text.split('\n'):
+                    line = line.strip()
+                    if line and metadata_re.search(line):
+                        return True
+                return False
+
+            def extract_date(text: str) -> str:
+                """Try to parse a date from text, return ISO format or None."""
                 match = date_pattern.search(text)
                 if match:
                     month_str, day_str, year_str = match.groups()
                     try:
-                        # Normalize month name to 3-letter abbreviation
                         month_abbrev = month_str[:3].capitalize()
-                        # Parse the date
                         date_str = f"{month_abbrev} {day_str}, {year_str}"
-                        parsed_date = datetime.strptime(date_str, "%b %d, %Y")
-                        result['date'] = parsed_date.isoformat()
-                        logger.debug(f"Found date via DOM: {result['date']}")
-                        break
-                    except ValueError as e:
-                        logger.debug(f"Failed to parse date '{text}': {e}")
-                        continue
+                        parsed = datetime.strptime(date_str, "%b %d, %Y")
+                        return parsed.isoformat()
+                    except ValueError:
+                        pass
+                return None
 
-            # Extract description using targeted selector
-            # Google Photos uses div.oBMhZb for info panel content
-            # We need to filter out metadata (time, camera settings, dimensions)
-            desc_elements = driver.find_elements(By.CSS_SELECTOR, 'div.oBMhZb')
+            # =================================================================
+            # STEP 3: Categorize each text piece by content
+            # =================================================================
+            potential_locations = []
+            potential_captions = []
 
-            # Patterns that indicate metadata, not a description
-            # These patterns match against each line of the text
-            metadata_patterns = [
-                r'^\d{1,2}:\d{2}',  # Time like "8:13 AM"
-                r'^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)',  # Day of week
-                r'^GMT[+-]',  # Timezone
-                r'^ƒ/',  # Aperture
-                r'^\d+(\.\d+)?mm$',  # Focal length
-                r'^ISO\d+',  # ISO
-                r'^\d+/\d+$',  # Shutter speed
-                r'^\d+(\.\d+)?\s*MP$',  # Megapixels
-                r'^\d+\s*[×x]\s*\d+$',  # Dimensions
-                r'^Ultra HDR',  # HDR mode
-            ]
-            metadata_re = re.compile('|'.join(metadata_patterns), re.IGNORECASE)
-
-            def is_metadata(text: str) -> bool:
-                """Check if text looks like metadata by checking each line."""
-                lines = text.strip().split('\n')
-                # If any line matches metadata, consider the whole thing metadata
-                for line in lines:
-                    line = line.strip()
-                    if line and metadata_re.match(line):
-                        return True
-                return False
-
-            for elem in desc_elements:
-                text = elem.text
-                if not text or not text.strip():
-                    continue
-
+            for text in all_texts:
                 text = text.strip()
-
-                # Skip if it matches metadata patterns
-                if is_metadata(text):
+                if not text or len(text) < 2:
                     continue
 
-                # Skip if it's the same as location (sometimes appears twice)
+                # Skip pure metadata
+                if is_metadata_or_ui(text):
+                    continue
+
+                # Check if it's a date
+                if not result['date']:
+                    date_val = extract_date(text)
+                    if date_val:
+                        result['date'] = date_val
+                        logger.debug(f"Found date: {result['date']}")
+                        continue  # Don't also use as caption
+
+                # Remaining text could be location or caption
+                # Location hints: short, looks geographic, came from location area
+                is_likely_location = (
+                    len(text) < 50 and
+                    not '\n' in text and
+                    (text == location_from_aria or
+                     # Geographic patterns: "City, State" or "City, Country"
+                     re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]', text) or
+                     # US state abbreviations
+                     re.search(r',\s*[A-Z]{2}$', text) or
+                     # Country/region names
+                     text in ['New Mexico', 'California', 'Colorado', 'Arizona', 'Utah',
+                             'New York', 'Texas', 'Florida', 'France', 'Italy', 'Spain',
+                             'Germany', 'Japan', 'Mexico', 'Canada', 'Australia'])
+                )
+
+                if is_likely_location:
+                    potential_locations.append(text)
+                else:
+                    potential_captions.append(text)
+
+            # =================================================================
+            # STEP 4: Select best location and caption
+            # =================================================================
+
+            # Prefer location from aria-label area, then other candidates
+            if location_from_aria and location_from_aria.lower() not in ['add location', 'unknown location']:
+                result['location'] = location_from_aria
+            elif potential_locations:
+                # Prefer more specific locations (longer usually means more specific)
+                result['location'] = max(potential_locations, key=len)
+
+            if result['location']:
+                logger.debug(f"Found location: {result['location']}")
+
+            # For caption, prefer longer text (more likely to be real description)
+            # Filter out anything that matches the location
+            for text in sorted(potential_captions, key=len, reverse=True):
                 if result['location'] and text == result['location']:
                     continue
-
-                # Skip very short text (likely labels)
                 if len(text) < 5:
                     continue
-
-                # This looks like a real description
+                # Skip if contains metadata lines
+                if '\n' in text:
+                    lines = [l.strip() for l in text.split('\n') if l.strip()]
+                    if any(is_metadata_or_ui(l) for l in lines):
+                        continue
                 result['caption'] = text
-                logger.debug(f"Found caption via DOM: {result['caption'][:50]}...")
+                logger.debug(f"Found caption: {result['caption'][:50]}...")
                 break
 
             return result

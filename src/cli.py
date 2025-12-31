@@ -231,6 +231,78 @@ def cmd_photos(args):
         print(f"[{media_type}] {date} {caption}")
 
 
+def cmd_reset_album(args):
+    """Reset metadata for a specific album."""
+    album_name = args.album
+
+    # Get list of albums to find the index
+    albums = api_call("/api/albums")
+
+    # Find the album by name (case-insensitive partial match)
+    matches = []
+    for i, album in enumerate(albums):
+        name = album.get("name", "")
+        if album_name.lower() == name.lower():
+            # Exact match - use this one
+            matches = [(i, name)]
+            break
+        elif album_name.lower() in name.lower():
+            matches.append((i, name))
+
+    if not matches:
+        print(f"Error: No album found matching '{album_name}'")
+        print("\nAvailable albums:")
+        for album in albums:
+            print(f"  - {album.get('name', '(unnamed)')}")
+        sys.exit(1)
+
+    if len(matches) > 1:
+        print(f"Error: Multiple albums match '{album_name}':")
+        for _, name in matches:
+            print(f"  - {name}")
+        print("\nPlease provide a more specific name.")
+        sys.exit(1)
+
+    index, matched_name = matches[0]
+
+    # Determine what to reset
+    clear_captions = not args.locations_only
+    clear_locations = not args.captions_only
+
+    if args.captions_only and args.locations_only:
+        print("Error: Cannot specify both --captions-only and --locations-only")
+        sys.exit(1)
+
+    # Confirm unless --yes flag
+    if not args.yes:
+        what = []
+        if clear_captions:
+            what.append("captions")
+        if clear_locations:
+            what.append("locations")
+        print(f"This will reset {' and '.join(what)} for album: {matched_name}")
+        response = input("Continue? [y/N] ").strip().lower()
+        if response not in ('y', 'yes'):
+            print("Cancelled.")
+            sys.exit(0)
+
+    # Make the API call
+    result = api_call(f"/api/albums/{index}/reset", "POST", {
+        "captions": clear_captions,
+        "locations": clear_locations
+    })
+
+    if result.get("success"):
+        count = result.get("photos_reset", 0)
+        print(f"Reset metadata for {count} photos in '{matched_name}'")
+        if clear_captions:
+            print("  - Captions cleared (will re-fetch on next sync)")
+        if clear_locations:
+            print("  - Locations cleared (will re-geocode when displayed)")
+    else:
+        print(f"Error: {result.get('error', 'Unknown error')}")
+
+
 # ============================================================================
 # Update Command
 # ============================================================================
@@ -422,6 +494,7 @@ Examples:
   photoloop albums              List configured sources
   photoloop add-album URL       Add a Google Photos album
   photoloop add-local PATH      Add a local directory
+  photoloop reset-album NAME    Reset metadata for an album
   photoloop update --check      Check for available updates
   photoloop update              Apply available updates
 
@@ -459,6 +532,28 @@ Environment:
     # Photos
     subparsers.add_parser("photos", help="List cached photos")
 
+    # Reset album metadata
+    reset_album = subparsers.add_parser(
+        "reset-album",
+        help="Reset metadata for an album (clears captions/locations)"
+    )
+    reset_album.add_argument("album", help="Album name (partial match supported)")
+    reset_album.add_argument(
+        "--captions-only", "-c",
+        action="store_true",
+        help="Only reset captions (keep locations)"
+    )
+    reset_album.add_argument(
+        "--locations-only", "-l",
+        action="store_true",
+        help="Only reset locations (keep captions)"
+    )
+    reset_album.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip confirmation prompt"
+    )
+
     # Update
     update_parser = subparsers.add_parser("update", help="Check for and apply updates")
     update_parser.add_argument(
@@ -486,6 +581,7 @@ Environment:
         "add-album": cmd_add_album,
         "add-local": cmd_add_local,
         "photos": cmd_photos,
+        "reset-album": cmd_reset_album,
         "update": cmd_update,
     }
 

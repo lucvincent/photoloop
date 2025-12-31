@@ -205,6 +205,9 @@ class CacheManager:
         self._playlist: List[str] = []
         self._playlist_index: int = 0
 
+        # Callback for notifying display when metadata is updated
+        self._metadata_update_callback: Optional[Callable[[str], None]] = None
+
         # Ensure cache directory exists
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -360,6 +363,22 @@ class CacheManager:
     def get_sync_progress(self) -> SyncProgress:
         """Get current sync progress for UI display."""
         return self._sync_progress
+
+    def set_metadata_update_callback(
+        self,
+        callback: Optional[Callable[[str], None]]
+    ) -> None:
+        """
+        Set callback for notifying when metadata is updated for a media item.
+
+        This allows the display to refresh when captions/locations are fetched
+        incrementally during sync, so they appear immediately instead of waiting
+        for the full sync to complete.
+
+        Args:
+            callback: Function(media_id) called when metadata is updated.
+        """
+        self._metadata_update_callback = callback
 
     def _get_media_id(self, url: str) -> str:
         """Generate a stable ID for a media URL."""
@@ -854,6 +873,7 @@ class CacheManager:
             # Note: Caption precedence is now applied at display time, not sync time
             def on_caption_found(url: str, google_caption: Optional[str], google_location: Optional[str] = None, google_date: Optional[str] = None) -> None:
                 media_id = self._get_media_id(url)
+                metadata_changed = False
                 with self._lock:
                     if media_id not in self._media:
                         return
@@ -862,14 +882,17 @@ class CacheManager:
                     if google_caption and google_caption != self._media[media_id].google_caption:
                         self._media[media_id].google_caption = google_caption
                         stats["captions_updated"] += 1
+                        metadata_changed = True
 
                     # Store Google location separately
                     if google_location and google_location != self._media[media_id].google_location:
                         self._media[media_id].google_location = google_location
+                        metadata_changed = True
 
                     # Store Google date (used as fallback when EXIF date is missing)
                     if google_date and google_date != self._media[media_id].google_date:
                         self._media[media_id].google_date = google_date
+                        metadata_changed = True
 
                     # Mark as fetched - we've tried to get Google metadata for this photo
                     # This is set even if caption/location/date are empty, so we don't retry
@@ -881,6 +904,13 @@ class CacheManager:
                         self._save_metadata()
                         captions_since_save[0] = 0
                         logger.info(f"Saved metadata (captions updated: {stats['captions_updated']})")
+
+                # Notify display if metadata changed (outside the lock to avoid deadlocks)
+                if metadata_changed and self._metadata_update_callback:
+                    try:
+                        self._metadata_update_callback(media_id)
+                    except Exception as e:
+                        logger.debug(f"Metadata update callback failed: {e}")
 
             # Group URLs by album for efficient fetching
             # Build mapping: album_name -> set of URLs belonging to that album
@@ -1324,6 +1354,59 @@ class CacheManager:
             if media_id in self._media:
                 self._media[media_id].location = location
                 self._save_metadata()
+
+    def reset_album_metadata(
+        self,
+        album_name: str,
+        clear_captions: bool = True,
+        clear_locations: bool = True
+    ) -> int:
+        """
+        Reset metadata for all photos in a specific album.
+
+        This clears the specified metadata fields so they can be re-fetched
+        on the next sync or lazy-loaded when displayed.
+
+        Args:
+            album_name: Name of the album to reset.
+            clear_captions: If True, clear google_caption and embedded_caption.
+            clear_locations: If True, clear location/exif_location (GPS coords kept).
+
+        Returns:
+            Number of photos affected.
+        """
+        count = 0
+        with self._lock:
+            for cached in self._media.values():
+                if cached.album_source != album_name:
+                    continue
+
+                if clear_captions:
+                    cached.google_caption = None
+                    cached.embedded_caption = None
+                    cached.google_metadata_fetched = False
+
+                if clear_locations:
+                    cached.location = None
+                    cached.exif_location = None
+                    cached.google_location = None
+
+                count += 1
+
+            if count > 0:
+                self._save_metadata()
+
+        logger.info(f"Reset metadata for {count} photos in album '{album_name}' "
+                    f"(captions={clear_captions}, locations={clear_locations})")
+        return count
+
+    def get_album_names(self) -> List[str]:
+        """Get list of unique album names in the cache."""
+        with self._lock:
+            return list(set(
+                cached.album_source for cached in self._media.values()
+                if cached.album_source
+            ))
 
     def clear_cache(self) -> None:
         """Clear all cached media."""

@@ -76,6 +76,17 @@ header h1 {
     text-shadow: 0 1px 2px rgba(0,0,0,0.3);
 }
 
+/* Hide "Dashboard" text on mobile */
+header h1 .title-dashboard {
+    display: inline;
+}
+
+@media (max-width: 600px) {
+    header h1 .title-dashboard {
+        display: none;
+    }
+}
+
 .status {
     padding: 8px 16px;
     border-radius: 20px;
@@ -336,6 +347,35 @@ input[type="checkbox"] {
 
 .control-buttons .btn {
     min-width: 120px;
+}
+
+/* Photo control buttons - icon-based for mobile */
+.photo-control-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.photo-control-btn .btn-icon {
+    font-size: 1.2em;
+}
+
+.photo-control-btn .btn-text {
+    display: inline;
+}
+
+@media (max-width: 600px) {
+    .photo-control-btn .btn-text {
+        display: none;
+    }
+    .photo-control-btn {
+        min-width: 50px !important;
+        padding: 10px 14px !important;
+    }
+    .photo-control-btn .btn-icon {
+        font-size: 1.4em;
+    }
 }
 
 #btn-start {
@@ -725,6 +765,24 @@ input[type="checkbox"] {
         font-size: 1.5em;
     }
 
+    .logo-title img {
+        width: 40px;
+        height: 40px;
+    }
+
+    /* More compact tabs at this breakpoint */
+    .tabs {
+        gap: 3px;
+        flex-wrap: nowrap;
+    }
+
+    .tab {
+        padding: 10px 12px;
+        font-size: 0.9em;
+        flex: 1;
+        text-align: center;
+    }
+
     .tab-content {
         padding: 20px;
     }
@@ -740,6 +798,16 @@ input[type="checkbox"] {
     .control-buttons .btn {
         flex: 1 1 calc(50% - 10px);
         min-width: 0;
+    }
+
+    /* Photo control buttons stay horizontal */
+    #photo-control-buttons {
+        flex-direction: row;
+        flex-wrap: nowrap;
+    }
+
+    #photo-control-buttons .btn {
+        flex: 1;
     }
 
     .album-list li {
@@ -767,28 +835,46 @@ input[type="checkbox"] {
         padding: 12px;
     }
 
+    /* Keep header horizontal on mobile */
     header {
-        flex-direction: column;
-        gap: 15px;
-        text-align: center;
+        flex-direction: row;
+        gap: 10px;
+        margin-bottom: 20px;
+        padding-bottom: 15px;
     }
 
     .logo-title {
-        flex-direction: column;
+        flex-direction: row;
         gap: 8px;
+    }
+
+    .logo-title img {
+        width: 40px;
+        height: 40px;
     }
 
     header h1 {
         font-size: 1.4em;
     }
 
+    .status {
+        padding: 6px 12px;
+        font-size: 0.8em;
+    }
+
+    /* Compact tabs - all on one line */
     .tabs {
-        justify-content: center;
+        justify-content: stretch;
+        gap: 2px;
+        flex-wrap: nowrap;
     }
 
     .tab {
-        padding: 10px 14px;
+        padding: 10px 6px;
         font-size: 0.85em;
+        flex: 1;
+        text-align: center;
+        border-radius: 6px 6px 0 0;
     }
 
     .tab-content {
@@ -796,13 +882,34 @@ input[type="checkbox"] {
         border-radius: 0 0 8px 8px;
     }
 
+    .tab-content h2 {
+        font-size: 1.1em;
+        margin-bottom: 15px;
+    }
+
+    /* Photo control buttons stay horizontal */
+    #photo-control-buttons {
+        flex-direction: row !important;
+        flex-wrap: nowrap;
+        justify-content: center;
+        gap: 8px;
+    }
+
+    #photo-control-buttons .btn {
+        flex: 1;
+        min-width: 0;
+        max-width: 80px;
+    }
+
+    /* Slideshow control buttons */
     .control-buttons {
-        flex-direction: column;
+        flex-direction: row;
+        flex-wrap: wrap;
     }
 
     .control-buttons .btn {
-        width: 100%;
-        flex: none;
+        flex: 1 1 auto;
+        min-width: 70px;
     }
 
     .time-range {

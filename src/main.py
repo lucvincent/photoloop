@@ -151,6 +151,11 @@ class PhotoLoop:
                 self.display.set_location_update_callback(
                     self.cache_manager.update_location
                 )
+                # Set up metadata update callback so display refreshes when
+                # captions are fetched incrementally during sync
+                self.cache_manager.set_metadata_update_callback(
+                    self.display.notify_metadata_updated
+                )
 
             logger.info("Display engine initialized")
             return True
