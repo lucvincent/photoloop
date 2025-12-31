@@ -101,6 +101,7 @@ photoloop reload              # Reload configuration
 photoloop albums              # List configured albums
 photoloop add-album URL       # Add a new album
 photoloop photos              # List cached photos
+photoloop reset-album NAME    # Reset metadata for an album
 photoloop update --check      # Check for available updates
 photoloop update              # Apply available updates
 
@@ -130,6 +131,31 @@ The update command will:
 
 **Note:** System packages (Chromium, SDL2, etc.) are not updated automatically.
 Run `sudo apt update && sudo apt upgrade` periodically for system updates.
+
+## Resetting Album Metadata
+
+If metadata (captions, locations) needs to be re-fetched for an album:
+
+```bash
+# Reset all metadata (captions + locations)
+photoloop reset-album "Album Name"
+
+# Reset only captions (keeps locations)
+photoloop reset-album "Album Name" --captions-only
+
+# Reset only locations (keeps captions, GPS coords preserved)
+photoloop reset-album "Album Name" --locations-only
+
+# Skip confirmation prompt
+photoloop reset-album "Album Name" --yes
+
+# Partial name matching supported
+photoloop reset-album "Santa"   # matches "Sante Fe - April 2024"
+```
+
+After resetting:
+- **Captions**: Re-fetched on next sync (`photoloop sync`)
+- **Locations**: Re-geocoded lazily when each photo is displayed (GPS coordinates are preserved)
 
 ## Configuration
 
