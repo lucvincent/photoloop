@@ -7,10 +7,11 @@ Uses SDL2's hardware-accelerated texture rendering for smooth transitions.
 import logging
 import os
 import subprocess
+import threading
 import time
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import pygame
 import pygame._sdl2 as sdl2
@@ -19,7 +20,7 @@ from PIL import Image
 from .cache_manager import CachedMedia
 from .config import PhotoLoopConfig, OverlayConfig
 from .image_processor import DisplayParams, ImageProcessor, KenBurnsAnimation
-from .metadata import format_date
+from .metadata import format_date, reverse_geocode
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,6 @@ class Display:
 
         # Initialize pygame (needed for fonts and events)
         pygame.init()
-        pygame.mouse.set_visible(False)
 
         # Create SDL2 window and hardware-accelerated renderer
         windowed = os.environ.get("PHOTOLOOP_WINDOWED", "").lower() in ("1", "true", "yes")
@@ -109,6 +109,19 @@ class Display:
         # Create hardware-accelerated renderer with vsync
         self._renderer = sdl2.Renderer(self._window, accelerated=True, vsync=True)
         logger.info("Using hardware-accelerated SDL2 renderer")
+
+        # Hide cursor (multiple methods for reliability)
+        pygame.mouse.set_visible(False)
+        # Move cursor off-screen
+        pygame.mouse.set_pos(self.screen_width + 100, self.screen_height + 100)
+        try:
+            import ctypes
+            sdl2_lib = ctypes.CDLL("libSDL2.so")
+            sdl2_lib.SDL_ShowCursor(0)  # 0 = SDL_DISABLE
+            # Also try warping cursor off-screen via SDL2
+            sdl2_lib.SDL_WarpMouseInWindow(None, self.screen_width + 100, self.screen_height + 100)
+        except Exception:
+            pass  # SDL2 cursor hiding is optional
 
         # Current state
         self.mode = DisplayMode.BLACK
@@ -168,6 +181,10 @@ class Display:
         self._skip_requested = False
         self._previous_requested = False
 
+        # Lazy geocoding state
+        self._location_update_callback: Optional[Callable[[str, str], None]] = None
+        self._geocoding_in_progress: Optional[str] = None  # media_id being geocoded
+
         # Visual feedback state
         self._feedback_type = None  # 'paused', 'resuming', 'next', 'previous'
         self._feedback_start_time = 0
@@ -215,6 +232,89 @@ class Display:
         logger.info(f"Reloading fonts (font_size={self.config.overlay.font_size})")
         self._init_fonts()
         self._needs_redraw = True  # Force redraw to show new font size
+
+    def set_location_update_callback(
+        self,
+        callback: Callable[[str, str], None]
+    ) -> None:
+        """
+        Set callback for persisting location updates to cache.
+
+        Args:
+            callback: Function(media_id, location) to persist geocoded location.
+        """
+        self._location_update_callback = callback
+
+    def _lazy_geocode_if_needed(self) -> None:
+        """
+        Trigger background geocoding for current photo if it has GPS but no location.
+
+        This is called after show_photo() sets _current_media. If the photo has
+        GPS coordinates but no location string, we geocode in a background thread
+        and update both the overlay and the cache when complete.
+
+        Only triggers if the location would actually be displayed (overlay enabled,
+        captions shown, and exif_location is a configured caption source).
+        """
+        if not self._current_media:
+            return
+
+        # Only geocode if location would be displayed
+        overlay_cfg = self.config.overlay
+        if not overlay_cfg.enabled or not overlay_cfg.show_caption:
+            return
+
+        # Check if exif_location is configured as a caption source
+        caption_sources = getattr(overlay_cfg, 'caption_sources', {})
+        if "exif_location" not in caption_sources:
+            return
+
+        media = self._current_media
+
+        # Skip if already has location or no GPS coordinates
+        if media.location:
+            return
+        if not media.gps_latitude or not media.gps_longitude:
+            return
+
+        # Skip if already geocoding this photo
+        if self._geocoding_in_progress == media.media_id:
+            return
+
+        # Mark as in progress
+        self._geocoding_in_progress = media.media_id
+        media_id = media.media_id
+        lat = media.gps_latitude
+        lon = media.gps_longitude
+
+        def do_geocode():
+            """Background thread to perform reverse geocoding."""
+            try:
+                location = reverse_geocode(lat, lon)
+                if location:
+                    logger.info(f"Lazy geocoded {media_id}: {location}")
+
+                    # Update current media if it's still being displayed
+                    if (self._current_media and
+                            self._current_media.media_id == media_id):
+                        self._current_media.location = location
+                        self._needs_redraw = True  # Trigger overlay update
+
+                    # Persist to cache via callback
+                    if self._location_update_callback:
+                        self._location_update_callback(media_id, location)
+                else:
+                    logger.debug(f"Geocoding returned no result for {media_id}")
+            except Exception as e:
+                logger.debug(f"Lazy geocoding failed for {media_id}: {e}")
+            finally:
+                # Clear in-progress flag if still set to this media
+                if self._geocoding_in_progress == media_id:
+                    self._geocoding_in_progress = None
+
+        # Start background thread
+        thread = threading.Thread(target=do_geocode, daemon=True)
+        thread.start()
 
     def _pil_to_texture(self, pil_image: Image.Image) -> sdl2.Texture:
         """Convert PIL Image to SDL2 Texture (GPU-resident)."""
@@ -286,8 +386,25 @@ class Display:
             bottom = int((crop.y + crop.height) * img_h)
             cropped = pil_image.crop((left, top, right, bottom))
 
-            target_w = int(self.screen_width * kb_scale)
-            target_h = int(self.screen_height * kb_scale)
+            # Calculate target size maintaining aspect ratio
+            # The cropped image may have different aspect ratio than screen
+            # (e.g., panoramas in balanced mode)
+            cropped_aspect = cropped.width / cropped.height
+            screen_aspect = self.screen_width / self.screen_height
+
+            # Target dimensions with kb_scale headroom
+            base_w = int(self.screen_width * kb_scale)
+            base_h = int(self.screen_height * kb_scale)
+
+            if cropped_aspect > screen_aspect:
+                # Cropped image is wider than screen - fit by height
+                # This ensures we have enough vertical headroom for Ken Burns
+                target_h = base_h
+                target_w = int(target_h * cropped_aspect)
+            else:
+                # Cropped image is taller than screen - fit by width
+                target_w = base_w
+                target_h = int(target_w / cropped_aspect)
 
             # Cap texture dimensions to SDL2's 4096 limit
             max_texture_size = 4096
@@ -324,6 +441,9 @@ class Display:
         self._kb_start_time = time.time()
         self._kb_duration = self.config.display.photo_duration_seconds
         self._needs_redraw = True
+
+        # Trigger lazy geocoding if photo has GPS but no location
+        self._lazy_geocode_if_needed()
 
     def _get_kb_frame(
         self,
@@ -442,8 +562,20 @@ class Display:
                 cy = anim.start_center[1] + (anim.end_center[1] - anim.start_center[1]) * eased
 
                 src_w, src_h = self._kb_source_size
-                view_w = src_w / zoom
-                view_h = src_h / zoom
+                src_aspect = src_w / src_h
+                screen_aspect = self.screen_width / self.screen_height
+
+                # Calculate view size to match SCREEN aspect ratio (not source)
+                # This ensures no stretching when drawing to screen
+                if src_aspect > screen_aspect:
+                    # Source is wider - fit by height, view is narrower than source
+                    view_h = src_h / zoom
+                    view_w = view_h * screen_aspect
+                else:
+                    # Source is taller - fit by width, view is shorter than source
+                    view_w = src_w / zoom
+                    view_h = view_w / screen_aspect
+
                 center_x = cx * src_w
                 center_y = cy * src_h
 
@@ -885,10 +1017,6 @@ class Display:
         """Check if current photo has been displayed long enough."""
         if self.mode != DisplayMode.SLIDESHOW:
             return False
-        # Skip requested overrides everything
-        if self._skip_requested:
-            self._skip_requested = False
-            return True
         # Paused means never complete
         if self._paused:
             return False
@@ -908,6 +1036,13 @@ class Display:
         self._skip_requested = True  # Also set skip to trigger immediate transition
         self._show_feedback('previous', duration=1.5)  # Longer to survive photo loading
         logger.info("Skip to previous requested, feedback shown")
+
+    def is_skip_requested(self) -> bool:
+        """Check and clear skip (next) request flag."""
+        if self._skip_requested:
+            self._skip_requested = False
+            return True
+        return False
 
     def is_previous_requested(self) -> bool:
         """Check and clear previous request flag."""

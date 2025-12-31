@@ -309,7 +309,33 @@ systemctl enable photoloop
 echo -e "${GREEN}Systemd service installed and enabled.${NC}"
 
 echo ""
-echo -e "${YELLOW}[7/8] Setting up network discovery (mDNS)...${NC}"
+echo -e "${YELLOW}[7/9] Configuring display (hide cursor)...${NC}"
+
+# Get the home directory for the service user
+SERVICE_USER_HOME=$(getent passwd "$SERVICE_USER" | cut -d: -f6)
+
+# Create labwc config directory
+mkdir -p "$SERVICE_USER_HOME/.config/labwc"
+
+# Create labwc rc.xml to hide cursor after 3 seconds of inactivity
+# This allows normal desktop use while hiding cursor during slideshow
+cat > "$SERVICE_USER_HOME/.config/labwc/rc.xml" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <core>
+    <!-- Hide cursor after 3 seconds of inactivity -->
+    <cursorHideTimeout>3000</cursorHideTimeout>
+  </core>
+</openbox_config>
+EOF
+
+# Set ownership
+chown -R "$SERVICE_USER:$SERVICE_USER" "$SERVICE_USER_HOME/.config/labwc"
+
+echo -e "${GREEN}Display cursor hiding configured.${NC}"
+
+echo ""
+echo -e "${YELLOW}[8/9] Setting up network discovery (mDNS)...${NC}"
 
 # Create avahi service file for local network discovery
 if [ -d /etc/avahi/services ]; then
@@ -331,7 +357,7 @@ else
 fi
 
 echo ""
-echo -e "${YELLOW}[8/8] Creating CLI commands...${NC}"
+echo -e "${YELLOW}[9/9] Creating CLI commands...${NC}"
 
 # Create CLI wrapper script
 cat > /usr/local/bin/photoloop << 'EOF'

@@ -79,6 +79,8 @@ class CachedMedia:
     display_params: Optional[Dict[str, Any]] = None  # Cached display parameters
     deleted: bool = False            # Marked for deletion
     location: Optional[str] = None   # Reverse-geocoded location from EXIF GPS
+    gps_latitude: Optional[float] = None   # EXIF GPS latitude for lazy geocoding
+    gps_longitude: Optional[float] = None  # EXIF GPS longitude for lazy geocoding
     google_location: Optional[str] = None  # Location scraped from Google Photos info panel
     google_metadata_fetched: bool = False  # True once Google DOM metadata has been fetched (even if empty)
     source_type: str = "google_photos"  # "google_photos" or "local"
@@ -102,6 +104,8 @@ class CachedMedia:
             "display_params": self.display_params,
             "deleted": self.deleted,
             "location": self.location,
+            "gps_latitude": self.gps_latitude,
+            "gps_longitude": self.gps_longitude,
             "google_location": self.google_location,
             "google_metadata_fetched": self.google_metadata_fetched,
             "source_type": self.source_type,
@@ -142,6 +146,8 @@ class CachedMedia:
             display_params=data.get("display_params"),
             deleted=data.get("deleted", False),
             location=data.get("location"),
+            gps_latitude=data.get("gps_latitude"),
+            gps_longitude=data.get("gps_longitude"),
             google_location=data.get("google_location"),
             google_metadata_fetched=data.get("google_metadata_fetched", False),
             source_type=data.get("source_type", "google_photos"),  # Default for backward compat
@@ -705,7 +711,10 @@ class CacheManager:
                                     if metadata.date_taken:
                                         existing.exif_date = metadata.date_taken.isoformat()
                                     existing.embedded_caption = metadata.caption
-                                    # Skip geocoding during sync - use extract_locations() later
+                                    # Store GPS for lazy geocoding, clear old location
+                                    existing.gps_latitude = metadata.gps_latitude
+                                    existing.gps_longitude = metadata.gps_longitude
+                                    existing.location = None  # Will be lazy-geocoded
                                     existing.file_mtime = current_mtime
                                     existing.content_hash = self._get_content_hash(local_path)
                                     # Clear cached display params since image may have changed
@@ -749,7 +758,8 @@ class CacheManager:
                         # Extract metadata
                         exif_date = None
                         embedded_caption = None
-                        location = None
+                        gps_latitude = None
+                        gps_longitude = None
                         if item.media_type == "photo":
                             try:
                                 metadata = self._metadata_extractor.extract(local_path)
@@ -757,11 +767,9 @@ class CacheManager:
                                     exif_date = metadata.date_taken.isoformat()
                                 # Store embedded caption separately
                                 embedded_caption = metadata.caption
-                                # Skip geocoding during sync to avoid blocking
-                                # Location will be extracted later via extract_locations()
-                                # if metadata.gps_latitude and metadata.gps_longitude:
-                                #     location = reverse_geocode(...)
-                                pass
+                                # Store GPS coordinates for lazy geocoding later
+                                gps_latitude = metadata.gps_latitude
+                                gps_longitude = metadata.gps_longitude
                             except Exception as e:
                                 logger.debug(f"Failed to extract metadata: {e}")
 
@@ -781,7 +789,8 @@ class CacheManager:
                             file_mtime=file_mtime,
                             display_params=None,  # Computed on demand
                             deleted=False,
-                            location=location
+                            gps_latitude=gps_latitude,
+                            gps_longitude=gps_longitude
                         )
                         self._media[media_id] = cached
                         stats["new"] += 1
@@ -1308,6 +1317,13 @@ class CacheManager:
         """Get last sync timestamp for each album."""
         with self._lock:
             return self._album_sync_times.copy()
+
+    def update_location(self, media_id: str, location: str) -> None:
+        """Update the location for a media item (used by lazy geocoding)."""
+        with self._lock:
+            if media_id in self._media:
+                self._media[media_id].location = location
+                self._save_metadata()
 
     def clear_cache(self) -> None:
         """Clear all cached media."""

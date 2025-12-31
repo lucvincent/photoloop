@@ -60,6 +60,13 @@ src/
 - When `off_hours_mode: "black"`, display powers off
 - When `off_hours_mode: "clock"`, display stays on showing time/date
 
+### Cursor Hiding
+- On Raspberry Pi with labwc (Wayland compositor), cursor is controlled by the compositor
+- Install script configures `~/.config/labwc/rc.xml` with `cursorHideTimeout=3000`
+- Cursor hides automatically after 3 seconds of inactivity
+- Allows normal desktop use while keeping cursor hidden during slideshow
+- Requires reboot after initial configuration to take effect
+
 ### Remote Control (remote_input.py)
 - Supports Bluetooth remotes via evdev (e.g., Fire TV Remote)
 - Auto-detects remotes on startup
@@ -241,6 +248,64 @@ once per cycle, but recent photos tend to appear earlier in the shuffled order.
 ### Known Issues
 - Album scraper can OOM on very large albums (needs batching/streaming)
 - Chrome memory usage accumulates during long scroll sessions
+
+### Ken Burns Effect - Disabled (Needs Rework)
+
+**Status:** Disabled in config (`ken_burns.enabled: false`). Needs architectural changes.
+
+**Issues identified (Dec 2024):**
+
+1. **Stretched images during transitions**
+   - Problem: When transitioning to a new photo, `_render_transition()` draws `next_texture` at full screen dimensions without applying the Ken Burns viewport
+   - Location: `display.py` lines ~606-614 (`_render_fade_transition`, `_render_slide_transition`)
+   - The texture has correct aspect ratio, but is stretched to fill screen during fade
+   - Result: Jarring stretch-then-correct visual glitch
+
+2. **Panoramas don't work with Ken Burns**
+   - Problem: Wide panoramas (e.g., 3:1 after 15% crop → 2.5:1) have Ken Burns zoom into a 16:9 viewport
+   - This shows a small vertical slice panning across the panorama - looks wrong
+   - Should either: skip Ken Burns for non-16:9 images, or implement horizontal scroll for panoramas
+
+3. **Aliasing artifacts**
+   - Problem: Visible jagged edges and shimmer during zoom/pan animation
+   - Causes:
+     - Using `Image.Resampling.BILINEAR` (fast but lower quality) in `show_photo()`
+     - SDL2 default texture scaling lacks proper filtering
+   - Fixes needed:
+     - Use `LANCZOS` for source texture creation
+     - Enable SDL2 texture filtering: `SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1")` or "2"
+     - Consider pre-scaling source texture larger for smoother zoom
+
+**Partial fixes already applied (in codebase but issues remain):**
+
+1. **Aspect ratio preservation in texture creation** (`display.py` ~377-410)
+   - Fixed: Source texture now maintains cropped image aspect ratio instead of forcing screen aspect
+   - The texture size is calculated to fit within target dimensions while preserving aspect
+
+2. **Aspect ratio preservation in viewport calculation** (`display.py` ~552-577)
+   - Fixed: Ken Burns viewport now calculated to match screen aspect ratio
+   - Prevents stretching during Ken Burns animation (but not during transitions)
+
+**Files involved:**
+- `src/display.py`: `show_photo()`, `_render_slideshow()`, `_render_transition()`, `_get_kb_frame()`
+- `src/image_processor.py`: `_generate_ken_burns()`, `get_ken_burns_frame()`
+- `src/main.py`: Main loop photo loading
+
+**Recommended approach for proper fix:**
+1. Create a separate "Ken Burns ready" texture that's already at screen dimensions with the initial viewport applied
+2. During transition, use this pre-rendered texture (no stretching)
+3. After transition completes, switch to live Ken Burns rendering
+4. Skip Ken Burns entirely for images with aspect ratio >2.0 or <0.5 (extreme panoramas/portraits)
+5. Consider horizontal panning mode for panoramas instead of zoom
+
+**Config settings (for reference):**
+```yaml
+ken_burns:
+  enabled: false        # Currently disabled
+  zoom_range: [1.0, 1.15]  # 0-15% zoom
+  pan_speed: 0.02
+  randomize: true
+```
 
 ### Testing
 

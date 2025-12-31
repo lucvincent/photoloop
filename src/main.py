@@ -145,6 +145,13 @@ class PhotoLoop:
 
         try:
             self.display = Display(self.config)
+
+            # Set up lazy geocoding callback if cache manager is available
+            if self.cache_manager:
+                self.display.set_location_update_callback(
+                    self.cache_manager.update_location
+                )
+
             logger.info("Display engine initialized")
             return True
 
@@ -467,10 +474,11 @@ class PhotoLoop:
                     self.display.set_mode(DisplayMode.SLIDESHOW)
 
                     # Check if we need to load a new photo
-                    # Only load new photo if duration complete AND no transition in progress
-                    # Also check for previous request
+                    # Skip/previous requests bypass duration and transition checks
+                    go_next = self.display.is_skip_requested()
                     go_previous = self.display.is_previous_requested()
                     if (current_media is None or
+                        go_next or
                         go_previous or
                         (self.display.is_photo_duration_complete() and
                          self.display.is_transition_complete())):
