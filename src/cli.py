@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional, Tuple, List
 
 import requests
@@ -310,7 +311,8 @@ def cmd_reset_album(args):
 INSTALL_DIR = "/opt/photoloop"
 VENV_PIP = f"{INSTALL_DIR}/venv/bin/pip"
 REQUIREMENTS_FILE = f"{INSTALL_DIR}/requirements.txt"
-SOURCE_DIR = "/home/luc/photoloop"  # Development source (if using git)
+# Development source directory (derived from this file's location: src/cli.py -> repo root)
+SOURCE_DIR = str(Path(__file__).parent.parent)
 
 
 def run_command(cmd: List[str], capture: bool = True) -> Tuple[int, str, str]:

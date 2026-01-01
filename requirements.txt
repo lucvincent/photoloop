@@ -14,6 +14,7 @@ chromedriver-autoinstaller>=0.6.0  # Fallback if system chromedriver unavailable
 
 # Configuration
 pyyaml>=6.0
+ruamel.yaml>=0.18.0  # Preserves comments when saving config
 
 # Image processing
 pillow>=10.0.0

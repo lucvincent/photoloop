@@ -11,7 +11,10 @@ from typing import Any, Callable, Optional
 
 from flask import Flask, jsonify, render_template, request, redirect, url_for
 
-from ..config import PhotoLoopConfig, load_config, save_config, config_to_dict, validate_config
+from ..config import (
+    PhotoLoopConfig, load_config, save_config, save_config_partial,
+    config_to_dict, validate_config
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,14 +121,10 @@ def create_app(
             if not data:
                 return jsonify({"error": "No data provided"}), 400
 
-            # Update config
-            # This is a simplified implementation - a full one would
-            # merge the data properly
+            # Update config (preserves comments in config file)
             config_path = app.photoloop_config.config_path
             if config_path:
-                import yaml
-                with open(config_path, 'w') as f:
-                    yaml.dump(data, f, default_flow_style=False)
+                save_config_partial(config_path, data)
 
                 # Reload config
                 new_config = load_config(config_path)
@@ -511,19 +510,10 @@ def create_app(
             # Update config in memory
             app.photoloop_config.schedule.enabled = enabled
 
-            # Save to config file
+            # Save to config file (preserves comments)
             config_path = app.photoloop_config.config_path
             if config_path:
-                import yaml
-                with open(config_path, 'r') as f:
-                    config_data = yaml.safe_load(f) or {}
-
-                if 'schedule' not in config_data:
-                    config_data['schedule'] = {}
-                config_data['schedule']['enabled'] = enabled
-
-                with open(config_path, 'w') as f:
-                    yaml.dump(config_data, f, default_flow_style=False)
+                save_config_partial(config_path, {'schedule': {'enabled': enabled}})
 
             # Notify of config change
             if app.on_config_change:
@@ -545,37 +535,32 @@ def create_app(
 
             config_path = app.photoloop_config.config_path
             if config_path:
-                import yaml
-                with open(config_path, 'r') as f:
-                    config_data = yaml.safe_load(f) or {}
-
-                if 'schedule' not in config_data:
-                    config_data['schedule'] = {}
+                # Build schedule updates
+                schedule_updates = {}
 
                 # Update weekday schedule
                 if 'weekday_start' in data or 'weekday_end' in data:
-                    if 'weekday' not in config_data['schedule']:
-                        config_data['schedule']['weekday'] = {}
+                    schedule_updates['weekday'] = {}
                     if 'weekday_start' in data:
-                        config_data['schedule']['weekday']['start_time'] = data['weekday_start']
+                        schedule_updates['weekday']['start_time'] = data['weekday_start']
                     if 'weekday_end' in data:
-                        config_data['schedule']['weekday']['end_time'] = data['weekday_end']
+                        schedule_updates['weekday']['end_time'] = data['weekday_end']
 
                 # Update weekend schedule
                 if 'weekend_start' in data or 'weekend_end' in data:
-                    if 'weekend' not in config_data['schedule']:
-                        config_data['schedule']['weekend'] = {}
+                    schedule_updates['weekend'] = {}
                     if 'weekend_start' in data:
-                        config_data['schedule']['weekend']['start_time'] = data['weekend_start']
+                        schedule_updates['weekend']['start_time'] = data['weekend_start']
                     if 'weekend_end' in data:
-                        config_data['schedule']['weekend']['end_time'] = data['weekend_end']
+                        schedule_updates['weekend']['end_time'] = data['weekend_end']
 
                 # Update off-hours mode
                 if 'off_hours_mode' in data:
-                    config_data['schedule']['off_hours_mode'] = data['off_hours_mode']
+                    schedule_updates['off_hours_mode'] = data['off_hours_mode']
 
-                with open(config_path, 'w') as f:
-                    yaml.dump(config_data, f, default_flow_style=False)
+                # Save to config file (preserves comments)
+                if schedule_updates:
+                    save_config_partial(config_path, {'schedule': schedule_updates})
 
             # Notify of config change
             if app.on_config_change:
@@ -597,36 +582,35 @@ def create_app(
 
             config_path = app.photoloop_config.config_path
             if config_path:
-                import yaml
-                with open(config_path, 'r') as f:
-                    config_data = yaml.safe_load(f) or {}
+                updates = {}
 
                 # Update display settings
-                if 'display' not in config_data:
-                    config_data['display'] = {}
+                display_updates = {}
                 if 'photo_duration_seconds' in data:
-                    config_data['display']['photo_duration_seconds'] = int(data['photo_duration_seconds'])
+                    display_updates['photo_duration_seconds'] = int(data['photo_duration_seconds'])
                 if 'transition_type' in data:
-                    config_data['display']['transition_type'] = data['transition_type']
+                    display_updates['transition_type'] = data['transition_type']
                 if 'order' in data:
-                    config_data['display']['order'] = data['order']
+                    display_updates['order'] = data['order']
+                if display_updates:
+                    updates['display'] = display_updates
 
                 # Update ken_burns settings
-                if 'ken_burns' not in config_data:
-                    config_data['ken_burns'] = {}
                 if 'ken_burns_enabled' in data:
-                    config_data['ken_burns']['enabled'] = bool(data['ken_burns_enabled'])
+                    updates['ken_burns'] = {'enabled': bool(data['ken_burns_enabled'])}
 
                 # Update overlay settings
-                if 'overlay' not in config_data:
-                    config_data['overlay'] = {}
+                overlay_updates = {}
                 if 'overlay_enabled' in data:
-                    config_data['overlay']['enabled'] = bool(data['overlay_enabled'])
+                    overlay_updates['enabled'] = bool(data['overlay_enabled'])
                 if 'overlay_font_size' in data:
-                    config_data['overlay']['font_size'] = int(data['overlay_font_size'])
+                    overlay_updates['font_size'] = int(data['overlay_font_size'])
+                if overlay_updates:
+                    updates['overlay'] = overlay_updates
 
-                with open(config_path, 'w') as f:
-                    yaml.dump(config_data, f, default_flow_style=False)
+                # Save to config file (preserves comments)
+                if updates:
+                    save_config_partial(config_path, updates)
 
             # Notify of config change
             if app.on_config_change:

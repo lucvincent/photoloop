@@ -7,6 +7,7 @@ Uses OpenCV's YuNet DNN-based detector for accurate face detection.
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import cv2
@@ -15,9 +16,10 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# Default model path
+# Default model path (installed location)
 DEFAULT_MODEL_PATH = "/opt/photoloop/models/face_detection_yunet_2023mar.onnx"
-DEV_MODEL_PATH = "/home/luc/photoloop/models/face_detection_yunet_2023mar.onnx"
+# Fallback for development (relative path)
+DEV_MODEL_PATH = "models/face_detection_yunet_2023mar.onnx"
 
 
 @dataclass
@@ -108,11 +110,17 @@ class FaceDetector:
         elif os.path.exists(DEV_MODEL_PATH):
             self.model_path = DEV_MODEL_PATH
         else:
-            raise RuntimeError(
-                f"YuNet model not found. Please download it to {DEFAULT_MODEL_PATH}\n"
-                "curl -L -o /opt/photoloop/models/face_detection_yunet_2023mar.onnx "
-                "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
-            )
+            # Check relative to this file (for development)
+            src_dir = Path(__file__).parent
+            model_file = src_dir.parent / "models" / "face_detection_yunet_2023mar.onnx"
+            if model_file.exists():
+                self.model_path = str(model_file)
+            else:
+                raise RuntimeError(
+                    f"YuNet model not found. Please download it to {DEFAULT_MODEL_PATH}\n"
+                    "curl -L -o /opt/photoloop/models/face_detection_yunet_2023mar.onnx "
+                    "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+                )
 
         # Detector will be initialized per-image (needs image dimensions)
         self._detector = None

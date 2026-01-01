@@ -31,13 +31,17 @@ class TestWebAppFixtures:
         # Create album mocks with explicit property values
         album1 = MagicMock()
         album1.url = "https://photos.app.goo.gl/test1"
+        album1.path = ""
         album1.name = "Album 1"
         album1.enabled = True
+        album1.type = "google_photos"
 
         album2 = MagicMock()
         album2.url = "https://photos.app.goo.gl/test2"
+        album2.path = ""
         album2.name = "Album 2"
         album2.enabled = False
+        album2.type = "google_photos"
 
         config.albums = [album1, album2]
         return config
@@ -85,6 +89,8 @@ class TestWebAppFixtures:
                 "completed_at": None
             }
         )
+        # Return empty dict for album sync times (used by api_get_albums)
+        cache_manager.get_album_sync_times.return_value = {}
         return cache_manager
 
     @pytest.fixture
@@ -469,17 +475,18 @@ class TestPhotosEndpoints(TestWebAppFixtures):
     """Tests for /api/photos endpoints."""
 
     def test_get_photos(self, client):
-        """Test GET /api/photos returns photo list."""
+        """Test GET /api/photos returns photo list (newest first, i.e. reversed)."""
         response = client.get("/api/photos")
         assert response.status_code == 200
         data = json.loads(response.data)
         assert len(data) == 2
-        assert data[0]["id"] == "photo1"
-        assert data[0]["google_caption"] == "Test caption 1"
-        assert data[0]["google_location"] == "San Francisco, CA"
-        assert data[1]["id"] == "photo2"
-        assert data[1]["google_caption"] is None
-        assert data[1]["embedded_caption"] == "Embedded caption"
+        # Photos are returned in reverse order (newest first)
+        assert data[0]["id"] == "photo2"
+        assert data[0]["google_caption"] is None
+        assert data[0]["embedded_caption"] == "Embedded caption"
+        assert data[1]["id"] == "photo1"
+        assert data[1]["google_caption"] == "Test caption 1"
+        assert data[1]["google_location"] == "San Francisco, CA"
 
     def test_get_photos_no_cache_manager(self, mock_config, mock_scheduler, mock_display):
         """Test GET /api/photos with no cache manager returns empty list."""

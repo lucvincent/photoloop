@@ -47,9 +47,23 @@ albums:
 sync:
   # How often to automatically sync albums (in minutes)
   # Default: 1440 (24 hours) - syncing is slow due to caption fetching
-  # Set to 0 for manual sync only (via web interface or CLI)
+  # Set to 0 to disable automatic sync (manual only via web interface or CLI)
   # Tradeoff: More frequent = more up-to-date, but uses more bandwidth/CPU
   interval_minutes: 1440
+
+  # Time of day for scheduled sync (24-hour format HH:MM)
+  # The first automatic sync will occur at this time, then every interval_minutes after.
+  # If omitted, sync starts interval_minutes after service start.
+  # Examples:
+  #   "03:00" - Sync at 3 AM (good for overnight updates)
+  #   "12:00" - Sync at noon
+  sync_time: "03:00"
+
+  # Whether to sync immediately when the service starts
+  # true = sync right away on startup (useful after adding new albums)
+  # false = wait for scheduled sync time
+  # Note: This is independent of sync_time - both can trigger syncs
+  sync_on_start: false
 
   # Download resolution
   # true = original quality (larger files, best quality)
@@ -58,18 +72,6 @@ sync:
   full_resolution: true
   max_dimension: 1920        # Max width/height if full_resolution is false
                              # Use 3840 for 4K displays
-
-  # Caption source precedence - which caption to use when both exist
-  # Options:
-  #   "google_photos" - Prefer Google Photos caption, fall back to embedded EXIF/IPTC
-  #   "embedded"      - Prefer embedded EXIF/IPTC caption, fall back to Google Photos
-  #
-  # Tradeoff:
-  #   - "google_photos" (default): Better for intentionally-added captions in Google Photos,
-  #     but requires fetching captions (slower sync, ~3-5 sec per new photo)
-  #   - "embedded": Faster sync (no caption fetching), but may show camera/software
-  #     metadata instead of user-added descriptions
-  caption_precedence: "google_photos"
 
 # ------------------------------------------------------------
 # Display Settings - Slideshow appearance and behavior
@@ -87,9 +89,40 @@ display:
   transition_type: "fade"
   transition_duration_ms: 1000     # Transition animation length in milliseconds
 
-  # Photo order
-  # Options: random, sequential
+  # Photo order - how photos are sequenced in the slideshow
+  # Options:
+  #   "random"           - Shuffled randomly, re-shuffled each cycle
+  #   "recency_weighted" - Random with recency bias (recent photos appear more often)
+  #   "alphabetical"     - Sorted by filename (case-insensitive)
+  #   "chronological"    - Sorted by date (oldest first)
+  #
+  # Date priority for chronological/recency_weighted:
+  #   1. EXIF date (embedded in photo metadata)
+  #   2. Google Photos date (scraped from album)
+  #   3. File modification time (fallback)
   order: "random"
+
+  # Recency-weighted mode settings (only used when order: "recency_weighted")
+  # This mode biases toward showing recent photos more frequently while still
+  # ensuring all photos appear at least once per cycle.
+  #
+  # How it works:
+  #   - Photos are weighted by age: newer photos get higher weight
+  #   - Weight decays linearly from 1.0 (today) to recency_min_weight (at cutoff)
+  #   - Photos older than recency_cutoff_years all have the same minimum weight
+  #   - Higher-weighted photos tend to appear earlier in each shuffled cycle
+  #
+  # recency_cutoff_years: Photos older than this have equal (minimum) weight
+  #   - 5.0 = photos from 5+ years ago are weighted equally
+  #   - 1.0 = only last year's photos get boosted
+  #   - 10.0 = gradual decay over a decade
+  recency_cutoff_years: 5.0
+
+  # recency_min_weight: Weight for photos at/beyond the cutoff age
+  #   - 0.33 = old photos are 1/3 as likely to appear early as new photos
+  #   - 0.1 = old photos are 1/10 as likely (strong recency bias)
+  #   - 1.0 = no recency bias (equivalent to "random")
+  recency_min_weight: 0.33
 
 # ------------------------------------------------------------
 # Scaling and Cropping - How photos fill the screen
@@ -114,11 +147,23 @@ scaling:
   # background_color: [32, 32, 32]  # Dark gray bars
 
   # Smart cropping (applies to fill and balanced modes)
+  # When enabled, uses intelligent algorithms to find the best crop region
   # Tradeoff: Enabled = better framing but slightly slower image processing
   smart_crop: true
 
-  # Face detection for smart cropping
-  # When enabled, crops will try to keep faces visible and well-positioned
+  # Smart crop method - which algorithm to use for finding crop regions
+  # Options:
+  #   "face"     - Use face detection (best for photos with people)
+  #   "saliency" - Use saliency detection (finds visually interesting regions)
+  #   "hybrid"   - Try face detection first, fall back to saliency if no faces
+  #
+  # Tradeoff:
+  #   - "face": Fast, works great for portraits/group photos, ignores non-face subjects
+  #   - "saliency": Slower (~200ms/photo), works for any subject (landscapes, objects)
+  #   - "hybrid": Most versatile but slowest (tries both methods)
+  smart_crop_method: "face"
+
+  # Face detection settings (used when smart_crop_method is "face" or "hybrid")
   # Uses YuNet neural network model for accurate detection
   #
   # Tradeoff:
@@ -130,13 +175,36 @@ scaling:
   # Where to position detected faces after cropping
   # Options:
   #   "center"         - Center faces in the frame
-  #   "rule_of_thirds" - Position faces at rule-of-thirds intersection
+  #   "rule_of_thirds" - Position faces at rule-of-thirds intersection points
   #   "top_third"      - Position faces in upper third (good for portraits)
   face_position: "center"
 
-  # Fallback crop position when no faces are detected
+  # Fallback crop position when no faces/salient regions are detected
   # Options: "center", "top", "bottom"
   fallback_crop: "center"
+
+  # Crop bias - when cropping is needed, which direction to prefer
+  # Options:
+  #   "center" - Crop equally from both sides
+  #   "top"    - Preserve top of image, crop from bottom (good for landscapes with sky)
+  #   "bottom" - Preserve bottom of image, crop from top
+  # Only applies when smart cropping doesn't find a specific region to preserve
+  crop_bias: "center"
+
+  # Saliency detection settings (used when smart_crop_method is "saliency" or "hybrid")
+  # Saliency detection uses a neural network (U2-Net) to find visually important regions
+  #
+  # saliency_threshold: Minimum saliency score to consider a pixel "important" (0.0-1.0)
+  #   - 0.3 = include moderately salient regions (more inclusive)
+  #   - 0.5 = only highly salient regions (more selective)
+  #   - Lower values = larger "important" regions, more context preserved
+  saliency_threshold: 0.3
+
+  # saliency_coverage: What fraction of the salient region must fit in the crop (0.0-1.0)
+  #   - 0.9 = crop must contain 90% of the detected salient area
+  #   - 0.7 = more aggressive cropping allowed, may cut some salient edges
+  #   - Higher values = safer crops but may need more black bars
+  saliency_coverage: 0.9
 
 # ------------------------------------------------------------
 # Ken Burns Effect - Slow zoom/pan during photo display
@@ -184,6 +252,19 @@ overlay:
   #   "%b %d, %Y"    -> "Jan 15, 2024"
   date_format: "%B %d, %Y"
 
+  # Date source preference - which date to display when multiple are available
+  # Options:
+  #   "exif_first"   - Use EXIF date if available, fall back to Google Photos date (default)
+  #   "google_first" - Use Google Photos date if available, fall back to EXIF date
+  #   "exif_only"    - Only show EXIF date, never Google Photos date
+  #   "google_only"  - Only show Google Photos date, never EXIF date
+  #
+  # Note:
+  #   - EXIF date: Embedded in photo file metadata (when photo was actually taken)
+  #   - Google date: Scraped from Google Photos album (may be upload date or edited date)
+  #   - EXIF is usually more accurate for "when was this photo taken"
+  date_source: "exif_first"
+
   # Overlay position on screen
   # Options: bottom_left, bottom_right, top_left, top_right
   position: "bottom_left"
@@ -201,6 +282,29 @@ overlay:
 
   padding: 20                      # Distance from screen edge in pixels
   max_caption_length: 200          # Truncate long captions (0 = no limit)
+
+  # Caption source priorities (lower number = higher priority)
+  # Available sources:
+  #   google_caption   - Description from Google Photos (user-entered)
+  #   embedded_caption - Caption from EXIF/IPTC metadata in photo file
+  #   google_location  - Location from Google Photos info panel
+  #   exif_location    - Reverse-geocoded location from EXIF GPS coordinates
+  #
+  # Only include sources you want to display. Omit a source to never show it.
+  # Duplicate values (e.g., same caption in Google and EXIF) are automatically skipped.
+  caption_sources:
+    google_caption: 1
+    embedded_caption: 2
+    google_location: 3
+    exif_location: 4
+
+  # How many caption sources to show (after deduplication)
+  # 1 = only highest priority source with data
+  # 2 = top two sources (e.g., caption + location)
+  max_caption_sources: 1
+
+  # Separator between multiple caption sources (when max_caption_sources > 1)
+  caption_separator: " — "
 
 # ------------------------------------------------------------
 # Schedule - When to display slideshow vs off-hours mode

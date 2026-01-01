@@ -11,6 +11,13 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 import logging
 
+# ruamel.yaml preserves comments when loading/saving
+try:
+    from ruamel.yaml import YAML
+    RUAMEL_AVAILABLE = True
+except ImportError:
+    RUAMEL_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # Default paths
@@ -297,6 +304,9 @@ def save_config(config: PhotoLoopConfig, config_path: Optional[str] = None) -> s
     """
     Save configuration to a YAML file.
 
+    Uses ruamel.yaml when available to preserve comments in the config file.
+    Falls back to pyyaml (which strips comments) if ruamel.yaml is not installed.
+
     Args:
         config: Configuration to save.
         config_path: Path to save to. If None, uses config.config_path or default.
@@ -313,13 +323,126 @@ def save_config(config: PhotoLoopConfig, config_path: Optional[str] = None) -> s
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
     # Convert to dict for YAML serialization
-    data = config_to_dict(config)
+    new_data = config_to_dict(config)
 
-    with open(config_path, 'w') as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    if RUAMEL_AVAILABLE and os.path.exists(config_path):
+        # Use ruamel.yaml to preserve comments
+        _save_config_with_comments(config_path, new_data)
+    else:
+        # Fallback to pyyaml (strips comments)
+        with open(config_path, 'w') as f:
+            yaml.dump(new_data, f, default_flow_style=False, sort_keys=False)
 
     logger.info(f"Saved config to {config_path}")
     return config_path
+
+
+def _save_config_with_comments(config_path: str, new_data: Dict[str, Any]) -> None:
+    """
+    Save config while preserving comments from the existing file.
+
+    Loads the existing config with ruamel.yaml (which preserves comments),
+    updates values from new_data, and writes back.
+    """
+    ruamel = YAML()
+    ruamel.preserve_quotes = True
+    ruamel.width = 100
+
+    # Load existing config with comments
+    with open(config_path, 'r') as f:
+        existing = ruamel.load(f)
+
+    if existing is None:
+        existing = {}
+
+    # Recursively update existing with new values
+    _update_recursive(existing, new_data)
+
+    # Write back with comments preserved
+    with open(config_path, 'w') as f:
+        ruamel.dump(existing, f)
+
+
+def _update_recursive(target: Dict, source: Dict) -> Dict:
+    """Update target dict with source values, preserving target's structure."""
+    if not isinstance(target, dict) or not isinstance(source, dict):
+        return source
+
+    for key, value in source.items():
+        if key in target:
+            if isinstance(target[key], dict) and isinstance(value, dict):
+                _update_recursive(target[key], value)
+            else:
+                target[key] = value
+        else:
+            target[key] = value
+
+    # Remove keys that are in target but not in source
+    keys_to_remove = [k for k in target if k not in source]
+    for key in keys_to_remove:
+        del target[key]
+
+    return target
+
+
+def save_config_partial(config_path: str, updates: Dict[str, Any]) -> None:
+    """
+    Update specific keys in config file while preserving comments.
+
+    Unlike save_config() which replaces the entire config, this function
+    only updates the specified keys, leaving other keys and all comments intact.
+
+    Args:
+        config_path: Path to the config file.
+        updates: Dictionary of updates to apply (can be nested).
+
+    Example:
+        save_config_partial('/etc/photoloop/config.yaml', {
+            'schedule': {'enabled': True},
+            'display': {'photo_duration_seconds': 10}
+        })
+    """
+    config_path = os.path.expanduser(config_path)
+
+    if RUAMEL_AVAILABLE and os.path.exists(config_path):
+        ruamel = YAML()
+        ruamel.preserve_quotes = True
+        ruamel.width = 100
+
+        with open(config_path, 'r') as f:
+            existing = ruamel.load(f)
+
+        if existing is None:
+            existing = {}
+
+        # Apply updates (without removing keys not in updates)
+        def apply_updates(target, source):
+            for key, value in source.items():
+                if key in target and isinstance(target[key], dict) and isinstance(value, dict):
+                    apply_updates(target[key], value)
+                else:
+                    target[key] = value
+
+        apply_updates(existing, updates)
+
+        with open(config_path, 'w') as f:
+            ruamel.dump(existing, f)
+    else:
+        # Fallback: load with pyyaml, update, save (loses comments)
+        with open(config_path, 'r') as f:
+            existing = yaml.safe_load(f) or {}
+
+        def apply_updates(target, source):
+            for key, value in source.items():
+                if key in target and isinstance(target[key], dict) and isinstance(value, dict):
+                    apply_updates(target[key], value)
+                else:
+                    target[key] = value
+
+        apply_updates(existing, updates)
+
+        with open(config_path, 'w') as f:
+            yaml.dump(existing, f, default_flow_style=False, sort_keys=False)
 
 
 def config_to_dict(config: PhotoLoopConfig) -> Dict[str, Any]:
@@ -381,8 +504,9 @@ def validate_config(config: PhotoLoopConfig) -> List[str]:
     if config.display.transition_type not in valid_transitions:
         errors.append(f"Invalid transition type. Must be one of: {valid_transitions}")
 
-    if config.display.order not in ['random', 'sequential']:
-        errors.append("Display order must be 'random' or 'sequential'")
+    valid_orders = ['random', 'recency_weighted', 'alphabetical', 'chronological']
+    if config.display.order not in valid_orders:
+        errors.append(f"Display order must be one of: {valid_orders}")
 
     # Check scaling settings
     if config.scaling.mode not in ['fill', 'fit', 'balanced', 'stretch']:
