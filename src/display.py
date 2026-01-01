@@ -1134,72 +1134,37 @@ class Display:
 
         return None
 
-    def _set_display_power(self, on: bool) -> None:
-        """
-        Control physical display power.
+    def _try_wlopm(self, on: bool, output_name: str) -> bool:
+        """Try wlopm (Wayland DPMS) power control. Returns True if successful."""
+        try:
+            env = os.environ.copy()
+            env['XDG_RUNTIME_DIR'] = '/run/user/1000'
+            env['WAYLAND_DISPLAY'] = 'wayland-0'
 
-        Tries multiple methods in order:
-        1. wlopm (for Wayland/labwc) - DPMS power management (keeps output active)
-        2. HDMI-CEC (for TVs) - uses cec-client
-        3. Falls back to just showing black screen
+            action = '--on' if on else '--off'
+            result = subprocess.run(
+                ['wlopm', action, output_name],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env
+            )
 
-        Note: wlr-randr --off completely disables the output (bad - breaks SDL2).
-        Note: DDC/CI causes resolution bugs on Wayland.
+            if result.returncode == 0:
+                logger.info(f"Display power {'on' if on else 'off'} (wlopm DPMS: {output_name})")
+                return True
+            else:
+                logger.debug(f"wlopm failed: {result.stderr}")
+        except FileNotFoundError:
+            logger.debug("wlopm not available")
+        except subprocess.TimeoutExpired:
+            logger.debug("wlopm timed out")
+        except Exception as e:
+            logger.debug(f"wlopm error: {e}")
+        return False
 
-        Args:
-            on: True to turn display on, False to turn off.
-        """
-        self._display_powered = on
-
-        # Method 1: Try wlopm (Wayland Output Power Management)
-        # This uses DPMS to put display in standby WITHOUT disabling the output
-        # Unlike wlr-randr --off, this keeps the Wayland output active so SDL2 works
-        output_name = self._get_wayland_output()
-        if output_name:
-            try:
-                env = os.environ.copy()
-                env['XDG_RUNTIME_DIR'] = '/run/user/1000'
-                env['WAYLAND_DISPLAY'] = 'wayland-0'
-
-                action = '--on' if on else '--off'
-                result = subprocess.run(
-                    ['wlopm', action, output_name],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    env=env
-                )
-
-                if result.returncode == 0:
-                    logger.info(f"Display power {'on' if on else 'off'} (wlopm DPMS: {output_name})")
-                    return
-                else:
-                    logger.debug(f"wlopm failed: {result.stderr}")
-            except FileNotFoundError:
-                logger.debug("wlopm not available")
-            except subprocess.TimeoutExpired:
-                logger.debug("wlopm timed out")
-            except Exception as e:
-                logger.debug(f"wlopm error: {e}")
-
-        # Method 2 (DISABLED): DDC/CI causes resolution bugs on Wayland
-        # When display powers back on via DDC, slideshow renders at half resolution.
-        # See CLAUDE.md "Display Power Control Bug" section.
-        # Keeping code here for potential future use on non-Wayland systems.
-        #
-        # try:
-        #     power_value = '1' if on else '4'
-        #     result = subprocess.run(
-        #         ['ddcutil', 'setvcp', 'd6', power_value],
-        #         capture_output=True, text=True, timeout=10
-        #     )
-        #     if result.returncode == 0:
-        #         logger.info(f"Display power {'on' if on else 'off'} (DDC)")
-        #         return
-        # except Exception as e:
-        #     logger.debug(f"DDC error: {e}")
-
-        # Method 2: Try HDMI-CEC (for TVs)
+    def _try_cec(self, on: bool) -> bool:
+        """Try HDMI-CEC power control. Returns True if successful."""
         try:
             if on:
                 result = subprocess.run(
@@ -1220,7 +1185,7 @@ class Display:
 
             if result.returncode == 0:
                 logger.info(f"Display power {'on' if on else 'off'} (CEC)")
-                return
+                return True
             else:
                 logger.debug(f"cec-client failed: {result.stderr}")
         except FileNotFoundError:
@@ -1229,6 +1194,62 @@ class Display:
             logger.debug("cec-client timed out")
         except Exception as e:
             logger.debug(f"CEC error: {e}")
+        return False
+
+    def _set_display_power(self, on: bool) -> None:
+        """
+        Control physical display power.
+
+        The method used depends on config.display.power_control:
+        - "auto": try wlopm (DPMS), then HDMI-CEC, then black screen
+        - "wlopm": Wayland DPMS only (for monitors on labwc/Wayland)
+        - "cec": HDMI-CEC only (for TVs)
+        - "none": just show black screen, don't control display power
+
+        Args:
+            on: True to turn display on, False to turn off.
+        """
+        self._display_powered = on
+
+        power_method = self.config.display.power_control.lower()
+        output_name = self._get_wayland_output()
+
+        # Method: none - just show black screen
+        if power_method == "none":
+            if on:
+                logger.info("Display resumed (power_control=none)")
+            else:
+                logger.info("Display off-hours mode (power_control=none, showing black)")
+            return
+
+        # Method: wlopm - Wayland DPMS only
+        if power_method == "wlopm":
+            if output_name and self._try_wlopm(on, output_name):
+                return
+            # wlopm failed or not available
+            if on:
+                logger.warning("wlopm failed, display may not have woken")
+            else:
+                logger.warning("wlopm failed, showing black screen instead")
+            return
+
+        # Method: cec - HDMI-CEC only
+        if power_method == "cec":
+            if self._try_cec(on):
+                return
+            # CEC failed or not available
+            if on:
+                logger.warning("CEC failed, display may not have woken")
+            else:
+                logger.warning("CEC failed, showing black screen instead")
+            return
+
+        # Method: auto - try wlopm first, then CEC, then fallback
+        if output_name and self._try_wlopm(on, output_name):
+            return
+
+        if self._try_cec(on):
+            return
 
         # Fallback: just log (black screen still saves some power on many displays)
         if on:

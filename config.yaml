@@ -124,6 +124,19 @@ display:
   #   - 1.0 = no recency bias (equivalent to "random")
   recency_min_weight: 0.33
 
+  # Display power control method for off-hours and stop/start
+  # Controls how the physical display is turned off to save power
+  #   "auto"  - Try methods in order: wlopm → CEC → black screen (default)
+  #   "wlopm" - Wayland DPMS only (for monitors on labwc/Wayland)
+  #   "cec"   - HDMI-CEC only (for TVs that support CEC)
+  #   "none"  - Just show black screen, don't control display power
+  #
+  # Notes:
+  #   - "wlopm" requires wlopm and wlr-randr packages (installed by default)
+  #   - "cec" requires cec-utils package and TV with HDMI-CEC support
+  #   - "none" is useful if power control causes issues with your display
+  power_control: "auto"
+
 # ------------------------------------------------------------
 # Scaling and Cropping - How photos fill the screen
 # ------------------------------------------------------------

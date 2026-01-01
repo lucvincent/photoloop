@@ -66,6 +66,12 @@ class DisplayConfig:
     # Recency-weighted random settings (only used when order = "recency_weighted")
     recency_cutoff_years: float = 5.0  # Photos older than this all have equal weight
     recency_min_weight: float = 0.33   # Weight at cutoff age (1.0 = no bias, lower = stronger bias)
+    # Display power control method for off-hours/stop
+    #   - auto: try wlopm (DPMS), then HDMI-CEC, then black screen (default)
+    #   - wlopm: Wayland DPMS only (for monitors on labwc/Wayland)
+    #   - cec: HDMI-CEC only (for TVs)
+    #   - none: just show black screen, don't control display power
+    power_control: str = "auto"
 
 
 @dataclass
