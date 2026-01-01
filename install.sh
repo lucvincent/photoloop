@@ -88,6 +88,8 @@ apt-get install -y \
     libavformat-dev \
     libswscale-dev \
     fonts-dejavu-core \
+    wlopm \
+    wlr-randr \
     cec-utils \
     ddcutil \
     libevdev-dev
