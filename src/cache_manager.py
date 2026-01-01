@@ -1386,12 +1386,37 @@ class CacheManager:
             return {"photos": photos, "videos": videos, "total": photos + videos}
 
     def get_cache_size_mb(self) -> float:
-        """Get total cache size in MB."""
+        """Get downloaded photos cache size in MB."""
         total = 0
         for cached in self._media.values():
             if os.path.exists(cached.local_path):
                 total += os.path.getsize(cached.local_path)
         return total / 1024 / 1024
+
+    def get_rendered_cache_size_mb(self) -> float:
+        """Get rendered frames cache size in MB."""
+        rendered_dir = self.cache_dir / "rendered"
+        if not rendered_dir.exists():
+            return 0.0
+        total = 0
+        for f in rendered_dir.iterdir():
+            if f.is_file():
+                total += f.stat().st_size
+        return total / 1024 / 1024
+
+    def get_cache_size_breakdown(self) -> dict:
+        """Get cache size breakdown in MB.
+
+        Returns:
+            Dict with 'downloaded', 'rendered', and 'total' sizes in MB.
+        """
+        downloaded = self.get_cache_size_mb()
+        rendered = self.get_rendered_cache_size_mb()
+        return {
+            "downloaded": round(downloaded, 1),
+            "rendered": round(rendered, 1),
+            "total": round(downloaded + rendered, 1)
+        }
 
     def get_all_media(self) -> List[CachedMedia]:
         """Get all non-deleted cached media."""

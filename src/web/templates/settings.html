@@ -279,7 +279,7 @@
             <div class="status-box">
                 <p><strong>Cache Directory:</strong> {{ config.cache.directory }}</p>
                 <p><strong>Max Size:</strong> {{ config.cache.max_size_mb }} MB</p>
-                <p><strong>Current Size:</strong> <span id="cache-size-detail">-</span> MB</p>
+                <p><strong>Current Size:</strong> <span id="cache-size-detail">-</span></p>
                 <p><strong>Photos:</strong> <span id="photo-count-detail">-</span></p>
                 <p><strong>Videos:</strong> <span id="video-count-detail">-</span></p>
             </div>
@@ -396,7 +396,14 @@
                     document.getElementById('cache-size').textContent = status.cache.size_mb;
                     document.getElementById('photo-count-detail').textContent = status.cache.counts.photos;
                     document.getElementById('video-count-detail').textContent = status.cache.counts.videos;
-                    document.getElementById('cache-size-detail').textContent = status.cache.size_mb;
+                    // Show breakdown: "XX MB (downloaded: XX MB, pre-rendered: XX MB)"
+                    const breakdown = status.cache.size_breakdown;
+                    if (breakdown) {
+                        document.getElementById('cache-size-detail').textContent =
+                            `${breakdown.total} MB (downloaded: ${breakdown.downloaded} MB, pre-rendered: ${breakdown.rendered} MB)`;
+                    } else {
+                        document.getElementById('cache-size-detail').textContent = status.cache.size_mb + ' MB';
+                    }
                 }
 
                 // Update button states based on current state

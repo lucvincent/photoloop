@@ -88,9 +88,11 @@ def create_app(
 
         # Add cache info
         if app.cache_manager:
+            size_breakdown = app.cache_manager.get_cache_size_breakdown()
             status["cache"] = {
                 "counts": app.cache_manager.get_media_count(),
-                "size_mb": round(app.cache_manager.get_cache_size_mb(), 1)
+                "size_mb": size_breakdown["total"],  # Total for backwards compat
+                "size_breakdown": size_breakdown  # Detailed breakdown
             }
 
         # Add schedule info
