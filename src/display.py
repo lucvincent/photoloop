@@ -110,18 +110,10 @@ class Display:
         self._renderer = sdl2.Renderer(self._window, accelerated=True, vsync=True)
         logger.info("Using hardware-accelerated SDL2 renderer")
 
-        # Hide cursor (multiple methods for reliability)
-        pygame.mouse.set_visible(False)
-        # Move cursor off-screen
-        pygame.mouse.set_pos(self.screen_width + 100, self.screen_height + 100)
-        try:
-            import ctypes
-            sdl2_lib = ctypes.CDLL("libSDL2.so")
-            sdl2_lib.SDL_ShowCursor(0)  # 0 = SDL_DISABLE
-            # Also try warping cursor off-screen via SDL2
-            sdl2_lib.SDL_WarpMouseInWindow(None, self.screen_width + 100, self.screen_height + 100)
-        except Exception:
-            pass  # SDL2 cursor hiding is optional
+        # Hide cursor - use SDL2's native cursor API for Wayland compatibility
+        # On Wayland, pygame's cursor methods don't work reliably.
+        # We create a transparent cursor using SDL2's low-level API.
+        self._hide_cursor()
 
         # Current state
         self.mode = DisplayMode.BLACK
@@ -189,6 +181,39 @@ class Display:
         self._feedback_type = None  # 'paused', 'resuming', 'next', 'previous'
         self._feedback_start_time = 0
         self._feedback_duration = 0  # 0 = persistent (for paused)
+
+    def _hide_cursor(self) -> None:
+        """Hide the mouse cursor.
+
+        On Wayland/labwc, we use the compositor's HideCursor action via a keybinding.
+        The keybinding (Super+F12) is configured in ~/.config/labwc/rc.xml and
+        triggered via wtype. This warps the cursor off-screen and hides it until
+        mouse movement occurs (keyboard/remote input won't unhide it).
+
+        Falls back to pygame.mouse.set_visible(False) for X11.
+        """
+        # Try labwc HideCursor action first (works on Wayland)
+        try:
+            result = subprocess.run(
+                ["wtype", "-M", "logo", "-k", "F12"],
+                capture_output=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                logger.debug("Cursor hidden via labwc HideCursor action")
+                return
+        except FileNotFoundError:
+            pass  # wtype not installed, try fallback
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception as e:
+            logger.debug(f"labwc cursor hiding failed: {e}")
+
+        # Fallback for X11 or other display servers
+        try:
+            pygame.mouse.set_visible(False)
+        except Exception:
+            pass
 
     def _init_fonts(self) -> None:
         """Initialize fonts for overlay and clock."""
@@ -735,31 +760,40 @@ class Display:
             return False
 
         # Collect available caption values with their priorities
+        # Track seen values to skip duplicates (case-insensitive)
         available = []
+        seen_values = set()
+
+        def add_if_unique(priority: int, value: str) -> None:
+            """Add value if not a duplicate (case-insensitive comparison)."""
+            normalized = value.lower().strip()
+            if normalized not in seen_values:
+                seen_values.add(normalized)
+                available.append((priority, value))
 
         # Google caption/description from Google Photos DOM
         if "google_caption" in source_priorities:
             value = self._current_media.google_caption
             if value and value.lower() not in invalid_values:
-                available.append((source_priorities["google_caption"], value))
+                add_if_unique(source_priorities["google_caption"], value)
 
         # Embedded EXIF/IPTC caption from photo file
         if "embedded_caption" in source_priorities:
             value = self._current_media.embedded_caption
             if value and value.lower() not in invalid_values and not is_camera_info(value):
-                available.append((source_priorities["embedded_caption"], value))
+                add_if_unique(source_priorities["embedded_caption"], value)
 
         # Google location from Google Photos DOM
         if "google_location" in source_priorities:
             value = self._current_media.google_location
             if value and value.lower() not in invalid_values:
-                available.append((source_priorities["google_location"], value))
+                add_if_unique(source_priorities["google_location"], value)
 
         # EXIF GPS location (reverse-geocoded)
         if "exif_location" in source_priorities:
             value = self._current_media.location
             if value and value.lower() not in invalid_values:
-                available.append((source_priorities["exif_location"], value))
+                add_if_unique(source_priorities["exif_location"], value)
 
         if not available:
             return None
@@ -804,7 +838,8 @@ class Display:
                     caption = caption[:overlay_cfg.max_caption_length]
                     if original_len > overlay_cfg.max_caption_length:
                         caption += "..."
-                lines.append(caption)
+                # Split on newlines to support multi-line captions (e.g., caption + location)
+                lines.extend(caption.split('\n'))
 
         if not lines:
             return

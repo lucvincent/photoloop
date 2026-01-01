@@ -309,30 +309,49 @@ systemctl enable photoloop
 echo -e "${GREEN}Systemd service installed and enabled.${NC}"
 
 echo ""
-echo -e "${YELLOW}[7/9] Configuring display (hide cursor)...${NC}"
+echo -e "${YELLOW}[7/9] Configuring display (cursor hiding)...${NC}"
 
 # Get the home directory for the service user
 SERVICE_USER_HOME=$(getent passwd "$SERVICE_USER" | cut -d: -f6)
 
-# Create labwc config directory
-mkdir -p "$SERVICE_USER_HOME/.config/labwc"
+# On Wayland/labwc, cursor hiding is done via the compositor's HideCursor action.
+# We set up a keybinding that PhotoLoop triggers on startup via wtype.
+# This hides the cursor until the mouse is physically moved.
 
-# Create labwc rc.xml to hide cursor after 3 seconds of inactivity
-# This allows normal desktop use while hiding cursor during slideshow
-cat > "$SERVICE_USER_HOME/.config/labwc/rc.xml" << 'EOF'
+# Install wtype if not present (needed to trigger keybinding)
+if ! command -v wtype &> /dev/null; then
+    apt-get install -y wtype
+fi
+
+# Configure labwc keybinding for cursor hiding
+mkdir -p "$SERVICE_USER_HOME/.config/labwc"
+LABWC_RC="$SERVICE_USER_HOME/.config/labwc/rc.xml"
+
+# Create or update rc.xml with HideCursor keybinding
+cat > "$LABWC_RC" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_config xmlns="http://openbox.org/3.4/rc">
-  <core>
-    <!-- Hide cursor after 3 seconds of inactivity -->
-    <cursorHideTimeout>3000</cursorHideTimeout>
-  </core>
+  <keyboard>
+    <!-- Hide cursor and warp it off-screen (triggered by PhotoLoop on startup) -->
+    <!-- PhotoLoop calls: wtype -M logo -k F12 -->
+    <!-- Cursor reappears on mouse movement, stays hidden for keyboard/remote input -->
+    <keybind key="W-F12">
+      <action name="WarpCursor" x="-100" y="-100" />
+      <action name="HideCursor" />
+    </keybind>
+  </keyboard>
 </openbox_config>
 EOF
 
 # Set ownership
 chown -R "$SERVICE_USER:$SERVICE_USER" "$SERVICE_USER_HOME/.config/labwc"
 
-echo -e "${GREEN}Display cursor hiding configured.${NC}"
+# Reload labwc config if running
+if pgrep -x labwc > /dev/null; then
+    pkill -HUP labwc 2>/dev/null || true
+fi
+
+echo -e "${GREEN}Cursor hiding configured (labwc HideCursor action)${NC}"
 
 echo ""
 echo -e "${YELLOW}[8/9] Setting up network discovery (mDNS)...${NC}"

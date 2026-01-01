@@ -61,11 +61,70 @@ src/
 - When `off_hours_mode: "clock"`, display stays on showing time/date
 
 ### Cursor Hiding
-- On Raspberry Pi with labwc (Wayland compositor), cursor is controlled by the compositor
-- Install script configures `~/.config/labwc/rc.xml` with `cursorHideTimeout=3000`
-- Cursor hides automatically after 3 seconds of inactivity
-- Allows normal desktop use while keeping cursor hidden during slideshow
-- Requires reboot after initial configuration to take effect
+
+On Wayland/labwc, applications cannot hide the cursor directly - the compositor controls it.
+
+**Solution (labwc 0.8.4+):** Use labwc's `HideCursor` + `WarpCursor` actions via keybinding.
+
+**Setup (already configured):**
+
+1. Keybinding in `~/.config/labwc/rc.xml`:
+   ```xml
+   <keybind key="W-F12">
+     <action name="WarpCursor" x="-100" y="-100" />
+     <action name="HideCursor" />
+   </keybind>
+   ```
+
+2. PhotoLoop triggers this on startup via `wtype -M logo -k F12` (in `display.py:_hide_cursor()`)
+
+**Behavior:**
+- Cursor is hidden ONLY when PhotoLoop is running (triggers on display init)
+- Stays hidden during keyboard/remote input (Fire TV remote works fine)
+- Reappears when mouse is physically moved OR when PhotoLoop exits
+- Normal desktop cursor works when PhotoLoop is not running
+
+**Manual cursor control:**
+```bash
+# Hide cursor
+wtype -M logo -k F12
+
+# Show cursor - just move the mouse
+
+# After VNC session, restart PhotoLoop to hide cursor again
+sudo systemctl restart photoloop
+```
+
+**Dependencies:** `wtype` package
+
+**VNC note:** VNC sends mouse position updates which count as "mouse movement" and will
+unhide the cursor. This is useful for remote administration. After disconnecting from VNC,
+restart PhotoLoop to hide the cursor again.
+
+**Approaches that did NOT work (Dec 2024):**
+
+1. **pygame.mouse.set_visible(False)** - Wayland ignores this; compositor controls cursor
+2. **SDL_ShowCursor(SDL_DISABLE)** - Same issue; Wayland compositor overrides
+3. **Setting null/transparent cursor via Wayland protocol** - Compositors ignore for security
+4. **System-wide invisible cursor theme (XCURSOR_THEME)**:
+   - Created `~/.local/share/icons/invisible/` with 1x1 transparent Xcursor via `xcursorgen`
+   - Set `XCURSOR_THEME=invisible` in `~/.config/labwc/environment`
+   - Problem: Hides cursor system-wide, not just for PhotoLoop
+   - Required reboot to take effect
+   - Created `cursor-toggle` script to switch between visible/invisible
+   - Rejected because we want cursor visible for desktop use
+5. **Framebuffer/kmsdrm backend** (SDL_VIDEODRIVER=kmsdrm):
+   - Would bypass compositor entirely, no cursor at all
+   - Problem: Can't run while labwc is using the display (exclusive access)
+   - Would require booting directly into PhotoLoop or VT switching
+   - Not pursued because labwc HideCursor worked
+
+**Why labwc HideCursor works:**
+- labwc 0.8.4+ added `HideCursor` action (wlroots-based compositor feature)
+- Combined with `WarpCursor` to move cursor off-screen (prevents hover effects)
+- Triggered via simulated keypress (`wtype`) - works from any process
+- Cursor automatically reappears on mouse movement (but NOT keyboard input)
+- See: https://github.com/labwc/labwc/discussions/2786
 
 ### Remote Control (remote_input.py)
 - Supports Bluetooth remotes via evdev (e.g., Fire TV Remote)
