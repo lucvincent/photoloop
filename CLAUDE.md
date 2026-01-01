@@ -52,13 +52,64 @@ src/
 - Confidence threshold: 0.6
 
 ### Display Power Control
-- Controls TV/monitor power during off-hours to save electricity
-- Tries multiple methods in order:
-  1. **DDC/CI** (for monitors) - uses `ddcutil` package - tried first
-  2. **HDMI-CEC** (for TVs) - uses `cec-utils` package
-  3. Falls back to black screen if neither available
-- When `off_hours_mode: "black"`, display powers off
-- When `off_hours_mode: "clock"`, display stays on showing time/date
+
+Controls TV/monitor power during off-hours to save electricity.
+
+**Working Method (Jan 2025): wlopm (Wayland Output Power Management)**
+
+Uses DPMS (Display Power Management Signaling) via `wlopm` tool to put the display
+into standby mode. This keeps the Wayland output active while the physical display
+sleeps, so SDL2 continues to work properly.
+
+**How it works:**
+1. User clicks "Stop" → `wlopm --off HDMI-A-1` puts display in DPMS standby
+2. Display enters power saving mode (backlight off, low power)
+3. PhotoLoop keeps running (SDL2 window still exists)
+4. User clicks "Start" → `wlopm --on HDMI-A-1` wakes display
+5. Brief 0.3s delay for display to stabilize
+6. Slideshow resumes at correct resolution
+
+**Requirements:**
+- `wlopm` package (Wayland output power management)
+- `wlr-randr` package (for detecting output name)
+- Environment variables: `XDG_RUNTIME_DIR=/run/user/1000`, `WAYLAND_DISPLAY=wayland-0`
+
+**Fallback chain:**
+1. wlopm (Wayland DPMS) - primary method for labwc/Wayland
+2. HDMI-CEC (for TVs) - uses cec-client
+3. Black screen (if neither available)
+
+**Config options:**
+- `off_hours_mode: "black"` - display powers off during off-hours
+- `off_hours_mode: "clock"` - display stays on showing time/date
+
+**Manual testing:**
+```bash
+# Check current state
+XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 wlopm
+
+# Turn display off (DPMS standby)
+XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 wlopm --off HDMI-A-1
+
+# Turn display on
+XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 wlopm --on HDMI-A-1
+```
+
+### Methods That Did NOT Work (Dec 2024 - Jan 2025)
+
+1. **DDC/CI via ddcutil** - Caused half-resolution bug on Wayland. Display renders
+   at quarter size in top-left corner after DDC power cycle. SDL2 reports correct
+   dimensions but compositor/GPU uses stale buffer sizes.
+
+2. **wlr-randr --off** - Completely disables Wayland output (not just standby).
+   Breaks SDL2 because there's no display to render to. PhotoLoop crashes if it
+   tries to start while output is disabled.
+
+3. **vcgencmd display_power** - Doesn't work while labwc (Wayland) is running.
+   The compositor has control over the display, not the firmware.
+
+**Files involved:**
+- `src/display.py`: `_set_display_power()`, `_get_wayland_output()`, `show_photo()`
 
 ### Cursor Hiding
 

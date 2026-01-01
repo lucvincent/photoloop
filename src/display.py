@@ -402,10 +402,10 @@ class Display:
         # Turn display back on if it was off
         if not self._display_powered:
             self._set_display_power(True)
-            # Give display a moment to stabilize after power on
-            time.sleep(0.5)
-            # Recreate renderer to ensure clean state after display power cycle
-            self._recreate_renderer()
+            # Brief pause for display to wake from DPMS standby
+            time.sleep(0.3)
+            # Refresh display dimensions in case compositor changed them
+            self._refresh_display_dimensions()
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
@@ -1104,48 +1104,100 @@ class Display:
 
             logger.info(f"Updated display dimensions to {self.screen_width}x{self.screen_height}")
 
+    def _get_wayland_output(self) -> Optional[str]:
+        """
+        Get the Wayland output name (e.g., HDMI-A-1) using wlr-randr.
+
+        Returns:
+            Output name string, or None if not available.
+        """
+        try:
+            env = os.environ.copy()
+            env['XDG_RUNTIME_DIR'] = '/run/user/1000'
+            env['WAYLAND_DISPLAY'] = 'wayland-0'
+
+            result = subprocess.run(
+                ['wlr-randr'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=env
+            )
+
+            if result.returncode == 0:
+                # Parse first line to get output name (e.g., "HDMI-A-1 \"LG...\"")
+                first_line = result.stdout.strip().split('\n')[0]
+                output_name = first_line.split()[0]
+                return output_name
+        except Exception as e:
+            logger.debug(f"Could not get Wayland output: {e}")
+
+        return None
+
     def _set_display_power(self, on: bool) -> None:
         """
         Control physical display power.
 
         Tries multiple methods in order:
-        1. DDC/CI (for monitors) - uses ddcutil - tried first as more reliable
+        1. wlopm (for Wayland/labwc) - DPMS power management (keeps output active)
         2. HDMI-CEC (for TVs) - uses cec-client
         3. Falls back to just showing black screen
+
+        Note: wlr-randr --off completely disables the output (bad - breaks SDL2).
+        Note: DDC/CI causes resolution bugs on Wayland.
 
         Args:
             on: True to turn display on, False to turn off.
         """
         self._display_powered = on
 
-        # TEMPORARILY DISABLED: DDC power control causes resolution issues on Wayland
-        # when the display powers back on. Skip DDC and just use black screen.
-        # TODO: Investigate Wayland compositor interaction with DDC
-        logger.info(f"Display power {'on' if on else 'off'} (DDC disabled - using black screen)")
-        return
+        # Method 1: Try wlopm (Wayland Output Power Management)
+        # This uses DPMS to put display in standby WITHOUT disabling the output
+        # Unlike wlr-randr --off, this keeps the Wayland output active so SDL2 works
+        output_name = self._get_wayland_output()
+        if output_name:
+            try:
+                env = os.environ.copy()
+                env['XDG_RUNTIME_DIR'] = '/run/user/1000'
+                env['WAYLAND_DISPLAY'] = 'wayland-0'
 
-        # Method 1: Try DDC/CI (for monitors) - most reliable for computer monitors
-        # VCP code 0xD6 = Power mode: 1=on, 4=off/standby
-        try:
-            power_value = '1' if on else '4'
-            result = subprocess.run(
-                ['ddcutil', 'setvcp', 'd6', power_value],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
+                action = '--on' if on else '--off'
+                result = subprocess.run(
+                    ['wlopm', action, output_name],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    env=env
+                )
 
-            if result.returncode == 0:
-                logger.info(f"Display power {'on' if on else 'off'} (DDC)")
-                return
-            else:
-                logger.debug(f"ddcutil failed: {result.stderr}")
-        except FileNotFoundError:
-            logger.debug("ddcutil not available")
-        except subprocess.TimeoutExpired:
-            logger.debug("ddcutil timed out")
-        except Exception as e:
-            logger.debug(f"DDC error: {e}")
+                if result.returncode == 0:
+                    logger.info(f"Display power {'on' if on else 'off'} (wlopm DPMS: {output_name})")
+                    return
+                else:
+                    logger.debug(f"wlopm failed: {result.stderr}")
+            except FileNotFoundError:
+                logger.debug("wlopm not available")
+            except subprocess.TimeoutExpired:
+                logger.debug("wlopm timed out")
+            except Exception as e:
+                logger.debug(f"wlopm error: {e}")
+
+        # Method 2 (DISABLED): DDC/CI causes resolution bugs on Wayland
+        # When display powers back on via DDC, slideshow renders at half resolution.
+        # See CLAUDE.md "Display Power Control Bug" section.
+        # Keeping code here for potential future use on non-Wayland systems.
+        #
+        # try:
+        #     power_value = '1' if on else '4'
+        #     result = subprocess.run(
+        #         ['ddcutil', 'setvcp', 'd6', power_value],
+        #         capture_output=True, text=True, timeout=10
+        #     )
+        #     if result.returncode == 0:
+        #         logger.info(f"Display power {'on' if on else 'off'} (DDC)")
+        #         return
+        # except Exception as e:
+        #     logger.debug(f"DDC error: {e}")
 
         # Method 2: Try HDMI-CEC (for TVs)
         try:
