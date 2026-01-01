@@ -222,13 +222,18 @@ scaling:
 # ------------------------------------------------------------
 # Ken Burns Effect - Slow zoom/pan during photo display
 # ------------------------------------------------------------
-# The Ken Burns effect adds subtle motion to still photos by slowly
-# zooming and panning. This creates a more engaging viewing experience.
+# EXPERIMENTAL: Ken Burns Effect
+# Adds subtle motion to still photos by slowly zooming and panning.
 #
-# Tradeoff: Enabled = more cinematic feel but uses slightly more CPU;
-# Disabled = static display, lower power consumption
+# WARNING: This feature is experimental and has known issues:
+# - Stretched images during transitions
+# - Poor results with panoramas
+# - May show aliasing artifacts
+# See CLAUDE.md "Ken Burns Effect - Disabled (Needs Rework)" for details.
+#
+# Disabled by default. Enable at your own risk - your mileage may vary.
 ken_burns:
-  enabled: true
+  enabled: false
 
   # Zoom range: [minimum, maximum]
   # 1.0 = no zoom, 1.15 = 15% zoom in

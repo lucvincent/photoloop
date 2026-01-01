@@ -104,8 +104,8 @@ class ScalingConfig:
 
 @dataclass
 class KenBurnsConfig:
-    """Ken Burns effect settings."""
-    enabled: bool = True
+    """Ken Burns effect settings (experimental - disabled by default)."""
+    enabled: bool = False
     zoom_range: List[float] = field(default_factory=lambda: [1.0, 1.15])
     pan_speed: float = 0.02
     randomize: bool = True

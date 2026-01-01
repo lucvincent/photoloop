@@ -465,9 +465,10 @@ once per cycle, but recent photos tend to appear earlier in the shuffled order.
 - Album scraper can OOM on very large albums (needs batching/streaming)
 - Chrome memory usage accumulates during long scroll sessions
 
-### Ken Burns Effect - Disabled (Needs Rework)
+### Ken Burns Effect (Experimental)
 
-**Status:** Disabled in config (`ken_burns.enabled: false`). Needs architectural changes.
+**Status:** Disabled by default (`ken_burns.enabled: false`). This feature is experimental
+with known issues. Enable at your own risk - your mileage may vary.
 
 **Issues identified (Dec 2024):**
 

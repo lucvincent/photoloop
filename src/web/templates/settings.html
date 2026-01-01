@@ -205,14 +205,6 @@
 
             <div class="form-group">
                 <label>
-                    <input type="checkbox" id="ken-burns-enabled"
-                           {% if config.ken_burns.enabled %}checked{% endif %}>
-                    Enable Ken Burns Effect
-                </label>
-            </div>
-
-            <div class="form-group">
-                <label>
                     <input type="checkbox" id="overlay-enabled"
                            {% if config.overlay.enabled %}checked{% endif %}>
                     Show Date/Caption Overlay
@@ -967,7 +959,6 @@
                     photo_duration_seconds: document.getElementById('photo-duration').value,
                     transition_type: document.getElementById('transition-type').value,
                     order: document.getElementById('display-order').value,
-                    ken_burns_enabled: document.getElementById('ken-burns-enabled').checked,
                     overlay_enabled: document.getElementById('overlay-enabled').checked,
                     overlay_font_size: document.getElementById('overlay-font-size').value
                 };
