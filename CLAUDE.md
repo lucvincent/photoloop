@@ -120,8 +120,33 @@ sleeps, so SDL2 continues to work properly.
 2. Display enters power saving mode (backlight off, low power)
 3. PhotoLoop keeps running (SDL2 window still exists)
 4. User clicks "Start" → `wlopm --on HDMI-A-1` wakes display
-5. Brief 0.3s delay for display to stabilize
+5. SDL2 renderer is recreated to clear corrupted GPU state (see below)
 6. Slideshow resumes at correct resolution
+
+**Critical: DPMS Wake GPU State Corruption (Jan 2025)**
+
+After DPMS standby, SDL2's internal GPU state can become corrupted even though the
+API reports correct dimensions. This causes the "quarter-screen bug" where photos
+render in only the top-left quarter of the display.
+
+**Symptoms:**
+- Photos render in top-left quarter of screen after Stop/Start
+- Logs show correct dimensions (3840x2160) but display is wrong
+- Service restart fixes it
+
+**Root cause:**
+- SDL2 initially reports wrong window size after DPMS wake (e.g., 1920x1080 on 4K)
+- Fullscreen toggle fixes the window size
+- BUT the renderer's internal GPU buffers remain at wrong size
+- Drawing to (0, 0, 3840, 2160) only fills quarter of actual screen
+
+**Solution implemented:**
+- Always recreate the SDL2 renderer after DPMS wake (`force_recreate=True`)
+- This clears corrupted GPU state regardless of whether dimensions "look" correct
+- Located in `_refresh_display_dimensions()` called from `show_photo()`
+
+**Note:** Even on fresh service start, SDL2 initially reports 1920x1080 for a 4K
+display. The mismatch detection and renderer recreation is needed every time.
 
 **Requirements:**
 - `wlopm` package (Wayland output power management)
@@ -163,7 +188,8 @@ XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 wlopm --on HDMI-A-1
    The compositor has control over the display, not the firmware.
 
 **Files involved:**
-- `src/display.py`: `_set_display_power()`, `_get_wayland_output()`, `show_photo()`
+- `src/display.py`: `_set_display_power()`, `_get_wayland_output()`, `show_photo()`,
+  `_refresh_display_dimensions(force_recreate)`, `_recreate_renderer()`
 
 ### Cursor Hiding
 

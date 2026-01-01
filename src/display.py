@@ -434,8 +434,9 @@ class Display:
             # Wait for display to wake from DPMS standby
             # Needs enough time for compositor to stabilize before querying dimensions
             time.sleep(0.5)
-            # Refresh display dimensions in case compositor changed them
-            self._refresh_display_dimensions()
+            # Force recreate renderer after DPMS wake - GPU state can be corrupted
+            # even when dimensions appear unchanged
+            self._refresh_display_dimensions(force_recreate=True)
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
@@ -561,7 +562,8 @@ class Display:
         if not self._display_powered:
             self._set_display_power(True)
             time.sleep(0.5)
-            self._refresh_display_dimensions()
+            # Force recreate renderer after DPMS wake - GPU state can be corrupted
+            self._refresh_display_dimensions(force_recreate=True)
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
@@ -1169,13 +1171,18 @@ class Display:
 
         return None
 
-    def _refresh_display_dimensions(self) -> None:
+    def _refresh_display_dimensions(self, force_recreate: bool = False) -> None:
         """
         Re-query window dimensions and update if changed.
 
         This is needed after display power on, as some display managers
         may alter window state during power transitions. On Wayland with
         DPMS, SDL2 may report stale dimensions after the display wakes.
+
+        Args:
+            force_recreate: If True, always recreate the renderer even if
+                          dimensions appear unchanged. Needed after DPMS wake
+                          where GPU state can be corrupted.
         """
         new_width, new_height = self._window.size
 
@@ -1259,7 +1266,10 @@ class Display:
         except Exception as e:
             logger.debug(f"Could not check logical size: {e}")
 
-        if new_width != self.screen_width or new_height != self.screen_height:
+        dimensions_changed = (new_width != self.screen_width or
+                               new_height != self.screen_height)
+
+        if dimensions_changed:
             logger.warning(
                 f"Display dimensions changed: {self.screen_width}x{self.screen_height} -> "
                 f"{new_width}x{new_height}"
@@ -1286,17 +1296,20 @@ class Display:
                 ken_burns_randomize=self.config.ken_burns.randomize
             )
 
-            # Recreate renderer to ensure correct scale factor
+        # Recreate renderer if dimensions changed OR if forced (e.g., after DPMS wake)
+        # DPMS can corrupt GPU state even when dimensions appear unchanged
+        if dimensions_changed or force_recreate:
+            if force_recreate and not dimensions_changed:
+                logger.info("Force recreating renderer after DPMS wake")
             self._recreate_renderer()
 
             # Reinit scaled feedback fonts for new resolution
             self._init_feedback_fonts()
 
-            # Brief delay for compositor to stabilize after resolution change
-            # The actual GPU priming happens on the first photo render
+            # Brief delay for compositor to stabilize after renderer recreation
             time.sleep(0.1)
 
-            logger.info(f"Updated display dimensions to {self.screen_width}x{self.screen_height}")
+            logger.info(f"Display dimensions: {self.screen_width}x{self.screen_height}")
 
     def _get_wayland_output(self) -> Optional[str]:
         """
