@@ -128,6 +128,7 @@ class Display:
         self._transition_start = 0
         self._transition_type = TransitionType.SLIDE_LEFT
         self._transition_frames = 0
+        self._transition_duration_override: Optional[int] = None  # For fast manual nav
 
         # Ken Burns state
         self._kb_start_time = 0
@@ -181,6 +182,15 @@ class Display:
         self._feedback_type = None  # 'paused', 'resuming', 'next', 'previous'
         self._feedback_start_time = 0
         self._feedback_duration = 0  # 0 = persistent (for paused)
+
+        # Cached scaled fonts for feedback (avoid creating fonts every frame)
+        self._feedback_text_font = None
+        self._paused_indicator_font = None
+        self._init_feedback_fonts()
+
+        # Verify display dimensions match native resolution
+        # SDL2 on Wayland sometimes reports wrong initial size (e.g., 1080p on 4K display)
+        self._refresh_display_dimensions()
 
     def _hide_cursor(self) -> None:
         """Hide the mouse cursor.
@@ -256,7 +266,23 @@ class Display:
         """Reload fonts when config changes (e.g., font size updated)."""
         logger.info(f"Reloading fonts (font_size={self.config.overlay.font_size})")
         self._init_fonts()
+        self._init_feedback_fonts()
         self._needs_redraw = True  # Force redraw to show new font size
+
+    def _init_feedback_fonts(self) -> None:
+        """Initialize resolution-scaled fonts for feedback overlays.
+
+        These fonts are cached to avoid expensive font creation every frame.
+        Call this when screen resolution changes.
+        """
+        res_scale = self.screen_height / 1080.0
+        try:
+            self._feedback_text_font = pygame.font.SysFont(None, int(54 * res_scale))
+            self._paused_indicator_font = pygame.font.SysFont(None, int(34 * res_scale))
+        except Exception:
+            # Fallback to default fonts
+            self._feedback_text_font = pygame.font.Font(None, int(54 * res_scale))
+            self._paused_indicator_font = pygame.font.Font(None, int(34 * res_scale))
 
     def set_location_update_callback(
         self,
@@ -389,7 +415,8 @@ class Display:
         self,
         media: CachedMedia,
         params: DisplayParams,
-        transition: bool = True
+        transition: bool = True,
+        manual_nav: bool = False
     ) -> None:
         """
         Display a photo with optional transition.
@@ -398,18 +425,23 @@ class Display:
             media: Cached media to display.
             params: Display parameters.
             transition: Whether to use transition effect.
+            manual_nav: If True, this is manual navigation (next/prev button).
+                       Uses faster transition for snappier feel.
         """
         # Turn display back on if it was off
         if not self._display_powered:
             self._set_display_power(True)
-            # Brief pause for display to wake from DPMS standby
-            time.sleep(0.3)
+            # Wait for display to wake from DPMS standby
+            # Needs enough time for compositor to stabilize before querying dimensions
+            time.sleep(0.5)
             # Refresh display dimensions in case compositor changed them
             self._refresh_display_dimensions()
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
         self._current_params = params
+
+        logger.info(f"show_photo: screen={self.screen_width}x{self.screen_height}, kb_enabled={self.config.ken_burns.enabled}, params.kb={params.ken_burns is not None}")
 
         # Load and prepare source image
         try:
@@ -477,19 +509,84 @@ class Display:
                 media.local_path,
                 params
             )
+            logger.info(f"show_photo: frame size={frame.size}, params.resolution={params.screen_resolution}")
             next_texture = self._pil_to_texture(frame)
 
         if transition and self._current_texture is not None:
-            self._start_transition(next_texture)
+            self._start_transition(next_texture, fast=manual_nav)
         else:
+            # First photo (no transition) - need special handling to ensure
+            # renderer is fully synchronized with GPU before texture is visible.
+            # This fixes the quarter-screen issue on some Wayland compositors.
             self._current_texture = next_texture
             self._next_texture = None
+
+            # Force multiple render passes to prime the GPU pipeline
+            # The first render may use stale buffer state on some systems
+            logger.info("First photo - priming GPU with multiple renders")
+            for _ in range(3):
+                self._render_slideshow()
+                self._renderer.present()
+                time.sleep(0.016)  # ~60fps timing
 
         self._kb_start_time = time.time()
         self._kb_duration = self.config.display.photo_duration_seconds
         self._needs_redraw = True
 
         # Trigger lazy geocoding if photo has GPS but no location
+        self._lazy_geocode_if_needed()
+
+    def show_preloaded_photo(
+        self,
+        media: CachedMedia,
+        params: DisplayParams,
+        frame: Image.Image,
+        transition: bool = True,
+        manual_nav: bool = False
+    ) -> None:
+        """
+        Display a pre-loaded photo (skips loading/processing).
+
+        This is the fast path for pre-loaded photos - the frame is already
+        processed and just needs texture creation.
+
+        Args:
+            media: Cached media to display.
+            params: Display parameters.
+            frame: Pre-processed PIL Image ready for texture.
+            transition: Whether to use transition effect.
+            manual_nav: If True, use faster transition.
+        """
+        # Turn display back on if it was off
+        if not self._display_powered:
+            self._set_display_power(True)
+            time.sleep(0.5)
+            self._refresh_display_dimensions()
+
+        self.mode = DisplayMode.SLIDESHOW
+        self._current_media = media
+        self._current_params = params
+
+        logger.info(f"show_preloaded_photo: using pre-loaded frame {frame.size}")
+
+        # Create texture from pre-loaded frame (fast - just texture creation)
+        next_texture = self._pil_to_texture(frame)
+
+        if transition and self._current_texture is not None:
+            self._start_transition(next_texture, fast=manual_nav)
+        else:
+            self._current_texture = next_texture
+            self._next_texture = None
+            # First photo priming
+            logger.info("First photo - priming GPU with multiple renders")
+            for _ in range(3):
+                self._render_slideshow()
+                self._renderer.present()
+                time.sleep(0.016)
+
+        self._kb_start_time = time.time()
+        self._kb_duration = self.config.display.photo_duration_seconds
+        self._needs_redraw = True
         self._lazy_geocode_if_needed()
 
     def _get_kb_frame(
@@ -517,12 +614,19 @@ class Display:
         else:
             return 1 - pow(-2 * t + 2, 2) / 2
 
-    def _start_transition(self, next_texture: sdl2.Texture) -> None:
-        """Start a transition to a new texture."""
+    def _start_transition(self, next_texture: sdl2.Texture, fast: bool = False) -> None:
+        """Start a transition to a new texture.
+
+        Args:
+            next_texture: The texture to transition to.
+            fast: If True, use a faster transition (for manual navigation).
+        """
         self._next_texture = next_texture
         self._transitioning = True
         self._transition_start = time.time()
         self._transition_frames = 0
+        # For manual navigation, use a much faster transition (300ms vs 1000ms)
+        self._transition_duration_override = 300 if fast else None
 
         transition_type = self.config.display.transition_type
         if transition_type == "random":
@@ -637,6 +741,7 @@ class Display:
             else:
                 self._source_texture.draw(dstrect=(0, 0, self.screen_width, self.screen_height))
         elif self._current_texture:
+            logger.info(f"_render_slideshow: drawing at dstrect=(0, 0, {self.screen_width}, {self.screen_height})")
             self._current_texture.draw(dstrect=(0, 0, self.screen_width, self.screen_height))
 
         # Render overlay
@@ -656,7 +761,8 @@ class Display:
             return
 
         elapsed = (time.time() - self._transition_start) * 1000
-        duration = self.config.display.transition_duration_ms
+        # Use override duration for manual navigation, otherwise config
+        duration = self._transition_duration_override or self.config.display.transition_duration_ms
         progress = min(1.0, elapsed / duration)
 
         self._transition_frames += 1
@@ -986,6 +1092,15 @@ class Display:
         # Create new renderer
         self._renderer = sdl2.Renderer(self._window, accelerated=True, vsync=True)
 
+        # Reset viewport to full window size (critical for correct rendering)
+        try:
+            # Explicitly set viewport to full window dimensions
+            full_rect = pygame.Rect(0, 0, self.screen_width, self.screen_height)
+            self._renderer.set_viewport(full_rect)
+            logger.info(f"Set viewport to {full_rect}")
+        except Exception as e:
+            logger.warning(f"Could not reset viewport: {e}")
+
         # Log new renderer state
         try:
             viewport = self._renderer.get_viewport()
@@ -1019,12 +1134,48 @@ class Display:
 
         logger.info("Renderer recreated successfully")
 
+    def _get_display_resolution(self) -> Optional[Tuple[int, int]]:
+        """
+        Get the native display resolution from wlr-randr.
+
+        Returns:
+            Tuple of (width, height) or None if unavailable.
+        """
+        try:
+            env = os.environ.copy()
+            env['XDG_RUNTIME_DIR'] = '/run/user/1000'
+            env['WAYLAND_DISPLAY'] = 'wayland-0'
+
+            result = subprocess.run(
+                ['wlr-randr'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=env
+            )
+
+            if result.returncode == 0:
+                # Look for the "current" mode line
+                for line in result.stdout.split('\n'):
+                    if 'current' in line and 'px' in line:
+                        # Parse "3840x2160 px, 60.000000 Hz (preferred, current)"
+                        parts = line.strip().split()
+                        if parts:
+                            resolution = parts[0]  # "3840x2160"
+                            w, h = resolution.split('x')
+                            return (int(w), int(h))
+        except Exception as e:
+            logger.debug(f"Could not get display resolution: {e}")
+
+        return None
+
     def _refresh_display_dimensions(self) -> None:
         """
         Re-query window dimensions and update if changed.
 
         This is needed after display power on, as some display managers
-        may alter window state during power transitions.
+        may alter window state during power transitions. On Wayland with
+        DPMS, SDL2 may report stale dimensions after the display wakes.
         """
         new_width, new_height = self._window.size
 
@@ -1040,31 +1191,64 @@ class Display:
         except Exception as e:
             logger.debug(f"Could not get renderer state: {e}")
 
-        # Check if dimensions look suspiciously small (possible compositor glitch)
-        # Common symptom: window reports half its expected size
-        min_expected_width = 800  # Reasonable minimum for a photo frame
-        if new_width < min_expected_width or new_height < min_expected_width:
-            logger.warning(
-                f"Window dimensions look wrong ({new_width}x{new_height}), "
-                "attempting to restore fullscreen"
-            )
+        # Get the actual display resolution from wlr-randr
+        # This is more reliable than SDL2's window size after DPMS wake
+        native_res = self._get_display_resolution()
+
+        # Check if SDL2's window dimensions differ significantly from native
+        # Common symptom after DPMS wake: window reports half its expected size
+        needs_refresh = False
+
+        if native_res:
+            native_w, native_h = native_res
+            # Check for significant mismatch (more than 10% different)
+            if (abs(new_width - native_w) > native_w * 0.1 or
+                    abs(new_height - native_h) > native_h * 0.1):
+                logger.warning(
+                    f"Window size mismatch: SDL2 reports {new_width}x{new_height}, "
+                    f"but display is {native_w}x{native_h}"
+                )
+                needs_refresh = True
+        else:
+            # Fallback: check for suspiciously small dimensions
+            min_expected_width = 800
+            if new_width < min_expected_width or new_height < min_expected_width:
+                logger.warning(
+                    f"Window dimensions look wrong ({new_width}x{new_height})"
+                )
+                needs_refresh = True
+
+        if needs_refresh:
+            logger.info("Toggling fullscreen to refresh window dimensions")
             try:
-                # Try to restore fullscreen mode
-                # Setting fullscreen property should force the window back to native resolution
+                # Toggle fullscreen off then on to force SDL2 to re-query display
+                self._window.set_fullscreen(False)
+                time.sleep(0.1)
                 self._window.set_fullscreen(True)
-                time.sleep(0.1)  # Brief delay for mode change
+                time.sleep(0.2)  # Give compositor time to stabilize
                 new_width, new_height = self._window.size
-                logger.info(f"Restored fullscreen: {new_width}x{new_height}")
+                logger.info(f"After fullscreen toggle: {new_width}x{new_height}")
+
+                # Verify the fix worked
+                if native_res:
+                    native_w, native_h = native_res
+                    if new_width != native_w or new_height != native_h:
+                        logger.warning(
+                            f"Fullscreen toggle didn't fully fix resolution: "
+                            f"got {new_width}x{new_height}, expected {native_w}x{native_h}"
+                        )
             except Exception as e:
-                logger.error(f"Failed to restore fullscreen: {e}")
+                logger.error(f"Failed to toggle fullscreen: {e}")
 
         # Always reset the viewport to full window size
         # This fixes issues where the renderer's viewport gets corrupted
+        # Note: set_viewport(None) doesn't always work, so use explicit rect
         try:
-            self._renderer.set_viewport(None)  # None = reset to full window
-            logger.debug("Reset renderer viewport to full window")
+            full_rect = pygame.Rect(0, 0, new_width, new_height)
+            self._renderer.set_viewport(full_rect)
+            logger.info(f"Reset viewport to {full_rect}")
         except Exception as e:
-            logger.debug(f"Could not reset viewport: {e}")
+            logger.warning(f"Could not reset viewport: {e}")
 
         # Reset logical size if it's set (should be None for 1:1 pixel mapping)
         try:
@@ -1101,6 +1285,16 @@ class Display:
                 ken_burns_pan_speed=self.config.ken_burns.pan_speed,
                 ken_burns_randomize=self.config.ken_burns.randomize
             )
+
+            # Recreate renderer to ensure correct scale factor
+            self._recreate_renderer()
+
+            # Reinit scaled feedback fonts for new resolution
+            self._init_feedback_fonts()
+
+            # Brief delay for compositor to stabilize after resolution change
+            # The actual GPU priming happens on the first photo render
+            time.sleep(0.1)
 
             logger.info(f"Updated display dimensions to {self.screen_width}x{self.screen_height}")
 
@@ -1311,14 +1505,14 @@ class Display:
         """Request skip to next photo."""
         self._skip_requested = True
         self._previous_requested = False
-        self._show_feedback('next', duration=1.5)  # Longer to survive photo loading
+        self._show_feedback('next', duration=1.0)  # Base duration, extended on cache miss
         logger.info("Skip to next requested, feedback shown")
 
     def skip_to_previous(self) -> None:
         """Request skip to previous photo."""
         self._previous_requested = True
         self._skip_requested = True  # Also set skip to trigger immediate transition
-        self._show_feedback('previous', duration=1.5)  # Longer to survive photo loading
+        self._show_feedback('previous', duration=1.0)  # Base duration, extended on cache miss
         logger.info("Skip to previous requested, feedback shown")
 
     def is_skip_requested(self) -> bool:
@@ -1338,13 +1532,13 @@ class Display:
     def pause(self) -> None:
         """Pause the slideshow on the current photo."""
         self._paused = True
-        self._show_feedback('paused', duration=0.5)  # Brief centered notification
+        self._show_feedback('paused', duration=1.0)
         logger.info("Slideshow paused")
 
     def resume(self) -> None:
         """Resume the slideshow auto-advance."""
         self._paused = False
-        self._show_feedback('resuming', duration=1.5)
+        self._show_feedback('resuming', duration=1.0)
         # Reset the timer so we get a full duration on this photo
         self._kb_start_time = time.time()
         logger.info("Slideshow resumed")
@@ -1374,9 +1568,28 @@ class Display:
         self._needs_redraw = True
 
         # Force immediate render to show feedback without delay
+        # Note: This is called from remote input thread, so we must be careful
+        # to use the appropriate render path based on current state
         if self.mode == DisplayMode.SLIDESHOW and self._current_texture:
-            self._render_slideshow()
-            self._renderer.present()
+            try:
+                if self._transitioning and self._next_texture:
+                    self._render_transition()
+                else:
+                    self._render_slideshow()
+                self._renderer.present()
+            except Exception as e:
+                # Rendering from non-main thread can fail - main loop will retry
+                logger.debug(f"Immediate feedback render failed: {e}")
+
+    def extend_feedback_duration(self, additional_seconds: float) -> None:
+        """Extend current feedback overlay duration (e.g., for cache miss).
+
+        Args:
+            additional_seconds: Additional time to add to current duration
+        """
+        if self._feedback_type is not None and self._feedback_duration > 0:
+            self._feedback_duration += additional_seconds
+            logger.debug(f"Extended feedback duration by {additional_seconds}s to {self._feedback_duration}s")
 
     def _render_feedback(self) -> None:
         """Render visual feedback overlay for user actions."""
@@ -1430,12 +1643,15 @@ class Display:
                 True, (255, 255, 255)
             )
 
+        # Scale factor for resolution independence (1080p = 1.0, 4K = 2.0)
+        res_scale = self.screen_height / 1080.0
+
         # Make icons larger to fill more of the container
         # Pause icon (double bars) needs to be slightly smaller to match arrow visual weight
         if self._feedback_type == 'paused':
-            target_icon_height = 120  # Smaller for pause to match arrow visual weight
+            target_icon_height = int(120 * res_scale)  # Smaller for pause to match arrow visual weight
         else:
-            target_icon_height = 150  # Arrows
+            target_icon_height = int(150 * res_scale)  # Arrows
 
         raw_w, raw_h = icon_surface.get_size()
         if raw_h > 0:
@@ -1446,15 +1662,15 @@ class Display:
 
         icon_w, icon_h = icon_surface.get_size()
 
-        # Fixed container size for all icons (square)
-        container_size = 180  # Fixed size for consistent appearance
+        # Container size scales with resolution for consistent physical appearance
+        container_size = int(180 * res_scale)
 
-        # Create background surface with rounded corners (fixed size for all)
+        # Create background surface with rounded corners
         bg_surface = pygame.Surface((container_size, container_size), pygame.SRCALPHA)
         bg_color = (0, 0, 0, 120)  # Lighter background
 
         # Draw rounded rectangle
-        radius = 20
+        radius = int(20 * res_scale)
         pygame.draw.rect(bg_surface, bg_color, (radius, 0, container_size - 2*radius, container_size))
         pygame.draw.rect(bg_surface, bg_color, (0, radius, container_size, container_size - 2*radius))
         pygame.draw.circle(bg_surface, bg_color, (radius, radius), radius)
@@ -1484,13 +1700,12 @@ class Display:
 
         # Render text below container if present (no background)
         if text:
-            # Use 54pt font for the text
-            text_font = pygame.font.SysFont(None, 54)
-            text_surface = text_font.render(text, True, (255, 255, 255))
+            # Use cached scaled font (avoid creating fonts every frame)
+            text_surface = self._feedback_text_font.render(text, True, (255, 255, 255))
             text_surface.set_alpha(alpha)
             text_w, text_h = text_surface.get_size()
             text_x = (self.screen_width - text_w) // 2
-            text_y = container_y + container_size + 15  # 15px gap below container
+            text_y = container_y + container_size + int(15 * res_scale)  # Scaled gap below container
 
             # Convert text to texture and draw
             text_texture = self._surface_to_texture(text_surface)
@@ -1514,16 +1729,19 @@ class Display:
 
         logger.debug("Rendering paused indicator")
 
-        # Render "PAUSED" text in amber/orange color (30% smaller than feedback font)
+        # Scale factor for resolution independence (1080p = 1.0, 4K = 2.0)
+        res_scale = self.screen_height / 1080.0
+
+        # Render "PAUSED" text in amber/orange color
         # Amber color indicates "waiting/hold" state
         text = "PAUSED"
         amber_color = (255, 191, 0)  # Amber/gold color
-        small_font = pygame.font.SysFont(None, 34)  # 30% smaller than 48pt
-        text_surface = small_font.render(text, True, amber_color)
+        # Use cached scaled font (avoid creating fonts every frame)
+        text_surface = self._paused_indicator_font.render(text, True, amber_color)
         text_w, text_h = text_surface.get_size()
 
-        # Small padding
-        padding = 10
+        # Small padding (scaled)
+        padding = int(10 * res_scale)
         bg_w = text_w + padding * 2
         bg_h = text_h + padding * 2
 
@@ -1532,7 +1750,7 @@ class Display:
         bg_color = (40, 30, 0, 140)  # Dark with slight amber tint
 
         # Simple rounded rectangle
-        radius = min(8, bg_h // 4)
+        radius = min(int(8 * res_scale), bg_h // 4)
         pygame.draw.rect(bg_surface, bg_color, (radius, 0, bg_w - 2*radius, bg_h))
         pygame.draw.rect(bg_surface, bg_color, (0, radius, bg_w, bg_h - 2*radius))
         pygame.draw.circle(bg_surface, bg_color, (radius, radius), radius)
@@ -1545,8 +1763,8 @@ class Display:
         text_y = padding
         bg_surface.blit(text_surface, (text_x, text_y))
 
-        # Position in bottom-right corner with margin
-        margin = 20
+        # Position in bottom-right corner with margin (scaled)
+        margin = int(20 * res_scale)
         x = self.screen_width - bg_w - margin
         y = self.screen_height - bg_h - margin
 

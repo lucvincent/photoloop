@@ -51,6 +51,60 @@ src/
 - Model file: models/face_detection_yunet_2023mar.onnx
 - Confidence threshold: 0.6
 
+### Rendered Frame Cache (Jan 2025)
+
+Pre-renders and caches display frames on disk for instant loading. Replaces the
+previous RAM-based preload system.
+
+**How it works:**
+1. When a photo is displayed, it's cropped/scaled to screen resolution
+2. The rendered frame is saved as high-quality JPEG to disk
+3. Next time the same photo is displayed, it loads instantly from cache
+4. Cache is invalidated per-photo when resolution or crop window changes
+
+**Cache structure:**
+```
+/var/lib/photoloop/cache/
+├── *.jpg                    # Original downloaded photos
+├── metadata.json            # Photo metadata (includes display_params.crop_region)
+└── rendered/                # Pre-rendered display frames
+    ├── cache_info.json      # Per-photo: resolution, crop_hash, size_bytes
+    └── <media_id>.jpg       # Rendered frames (JPEG quality 95)
+```
+
+**Cache invalidation (per-photo, lazy):**
+- Resolution change: Only re-renders photos as they're displayed at new resolution
+- Crop change: Hash of crop_region compared; mismatch triggers re-render
+- User can switch back to old resolution and cached frames are still valid
+
+**Config settings:**
+```yaml
+rendered_cache:
+  enabled: true
+  max_size_mb: 0       # Max disk space (0 = no limit)
+  quality: 95          # JPEG quality (90-98)
+```
+
+**Key files:**
+- `src/cache_manager.py`: `get_rendered_frame()`, `save_rendered_frame()`, `clear_rendered_cache()`
+- `src/main.py`: Main loop uses rendered cache before falling back to processing
+- `src/config.py`: `RenderedCacheConfig` dataclass
+
+**Benefits over RAM preloading:**
+- Persistent across restarts (no warm-up time)
+- No RAM usage for cached frames
+- Instant loading for previously-viewed photos
+- Works with any number of photos (not limited by RAM)
+
+**Manual cache management:**
+```bash
+# Check cache size
+du -sh /var/lib/photoloop/cache/rendered/
+
+# Clear rendered cache (will rebuild as photos are viewed)
+rm -rf /var/lib/photoloop/cache/rendered/
+```
+
 ### Display Power Control
 
 Controls TV/monitor power during off-hours to save electricity.

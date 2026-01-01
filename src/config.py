@@ -174,6 +174,26 @@ class CacheConfig:
 
 
 @dataclass
+class RenderedCacheConfig:
+    """Settings for pre-rendered display frame cache.
+
+    Caches photos after cropping at the native display resolution for instant loading.
+    """
+    # Whether rendered frame caching is enabled
+    enabled: bool = True
+
+    # Maximum disk space for rendered frames (MB)
+    # 0 = no limit (let cache grow freely)
+    # Rendered frames are regenerable, so this cache can be cleared if disk is tight
+    max_size_mb: int = 0
+
+    # JPEG quality for cached frames (90-98)
+    # Higher = better quality but larger files
+    # 95 is a good balance (~2-4 MB per 4K frame)
+    quality: int = 95
+
+
+@dataclass
 class WebConfig:
     """Web interface settings."""
     enabled: bool = True
@@ -202,6 +222,7 @@ class PhotoLoopConfig:
     cache: CacheConfig = field(default_factory=CacheConfig)
     web: WebConfig = field(default_factory=WebConfig)
     local_albums: LocalAlbumsConfig = field(default_factory=LocalAlbumsConfig)
+    rendered_cache: RenderedCacheConfig = field(default_factory=RenderedCacheConfig)
 
     # Runtime state (not persisted)
     config_path: Optional[str] = None
@@ -297,6 +318,8 @@ def load_config(config_path: Optional[str] = None) -> PhotoLoopConfig:
         schedule=_dict_to_dataclass(config_data.get('schedule'), ScheduleConfig),
         cache=_dict_to_dataclass(config_data.get('cache'), CacheConfig),
         web=_dict_to_dataclass(config_data.get('web'), WebConfig),
+        local_albums=_dict_to_dataclass(config_data.get('local_albums'), LocalAlbumsConfig),
+        rendered_cache=_dict_to_dataclass(config_data.get('rendered_cache'), RenderedCacheConfig),
         config_path=found_path,
     )
 
@@ -558,5 +581,12 @@ def validate_config(config: PhotoLoopConfig) -> List[str]:
     # Check web settings
     if config.web.port < 1 or config.web.port > 65535:
         errors.append("Web port must be between 1 and 65535")
+
+    # Check rendered cache settings
+    if config.rendered_cache.max_size_mb < 0:
+        errors.append("Rendered cache max_size_mb must be 0 (no limit) or positive")
+
+    if not (70 <= config.rendered_cache.quality <= 100):
+        errors.append("Rendered cache quality must be between 70 and 100")
 
     return errors

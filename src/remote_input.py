@@ -53,19 +53,27 @@ class RemoteInputHandler:
         "Fire TV Remote",
     ]
 
-    def __init__(self, action_callback: Optional[Callable[[RemoteAction], None]] = None):
+    def __init__(
+        self,
+        action_callback: Optional[Callable[[RemoteAction], None]] = None,
+        reconnect_callback: Optional[Callable[[], None]] = None
+    ):
         """
         Initialize the remote input handler.
 
         Args:
             action_callback: Function to call when an action is triggered.
+            reconnect_callback: Function to call when remote reconnects (useful for
+                wake-on-reconnect since the button press that woke the remote is lost).
         """
         self._callback = action_callback
+        self._reconnect_callback = reconnect_callback
         self._device: Optional["InputDevice"] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._pending_actions: list[RemoteAction] = []
         self._lock = threading.Lock()
+        self._was_connected = False  # Track connection state for reconnect detection
 
     def find_remote(self) -> Optional[str]:
         """
@@ -110,6 +118,7 @@ class RemoteInputHandler:
         if device_path:
             try:
                 self._device = InputDevice(device_path)
+                self._was_connected = True  # Mark as connected (not a reconnect)
                 logger.info(f"Remote input handler started for {self._device.name}")
             except Exception as e:
                 logger.warning(f"Failed to open remote device: {e}")
@@ -139,7 +148,7 @@ class RemoteInputHandler:
 
     def _input_loop(self) -> None:
         """Background thread that reads input events with auto-reconnect."""
-        reconnect_delay = 5  # seconds between reconnection attempts
+        reconnect_delay = 2  # seconds between reconnection attempts (faster for wake detection)
 
         while self._running:
             # Ensure we have a valid device
@@ -179,6 +188,18 @@ class RemoteInputHandler:
         try:
             self._device = InputDevice(device_path)
             logger.info(f"Remote reconnected: {self._device.name} at {device_path}")
+
+            # If this is a genuine reconnect (was connected before), call the callback.
+            # This allows wake-on-reconnect since the button press that woke the
+            # remote from sleep is lost by the time the device appears.
+            if self._was_connected and self._reconnect_callback:
+                logger.info("Remote reconnected after disconnect - triggering reconnect callback")
+                try:
+                    self._reconnect_callback()
+                except Exception as e:
+                    logger.error(f"Reconnect callback error: {e}")
+            self._was_connected = True
+
             return True
         except Exception as e:
             logger.debug(f"Failed to reconnect to remote: {e}")

@@ -364,6 +364,36 @@ schedule:
   #     end_time: "00:00"          # Midnight (use 00:00 for midnight)
 
 # ------------------------------------------------------------
+# Rendered Cache - Pre-processed photos for instant display
+# ------------------------------------------------------------
+# PhotoLoop caches photos after cropping at your display's native resolution.
+# This enables instant loading since no image processing is needed.
+#
+# The cache builds up naturally as you view photos. Each rendered frame
+# is stored on disk and loaded instantly on subsequent views.
+rendered_cache:
+  # Enable rendered frame caching (strongly recommended)
+  enabled: true
+
+  # Maximum disk space for rendered frames (in MB)
+  # 0 = no limit (let cache grow freely)
+  # Set a limit if disk space is constrained
+  #
+  # Size estimates (~2-4 MB per rendered frame at 4K):
+  #   - 500 photos → ~1-2 GB
+  #   - 1000 photos → ~2-4 GB
+  #
+  # Note: Rendered frames can be regenerated, so this cache is safe to clear.
+  max_size_mb: 0
+
+  # JPEG quality for cached frames (70-100)
+  # Higher = better quality but larger files
+  #   - 95: Excellent quality, ~2-4 MB per 4K frame (recommended)
+  #   - 90: Good quality, ~1.5-3 MB per frame
+  #   - 85: Acceptable quality, ~1-2 MB per frame
+  quality: 95
+
+# ------------------------------------------------------------
 # Cache Settings - Local storage for photos/videos
 # ------------------------------------------------------------
 cache:

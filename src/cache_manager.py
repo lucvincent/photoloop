@@ -208,6 +208,10 @@ class CacheManager:
         # Callback for notifying display when metadata is updated
         self._metadata_update_callback: Optional[Callable[[str], None]] = None
 
+        # Rendered frame cache (stores pre-processed display frames on disk)
+        self._rendered_cache_info: Dict[str, Dict[str, Any]] = {}  # media_id -> {resolution, crop_hash, size_bytes}
+        self._rendered_cache_dir: Optional[Path] = None
+
         # Ensure cache directory exists
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1210,6 +1214,57 @@ class CacheManager:
 
             return self._media.get(media_id)
 
+    def peek_next_media(self) -> Optional[CachedMedia]:
+        """
+        Peek at the next media item without advancing the playlist.
+
+        Used for pre-loading the next photo in background.
+
+        Returns:
+            CachedMedia or None if no media available.
+        """
+        with self._lock:
+            if not self._playlist:
+                self._rebuild_playlist()
+
+            if not self._playlist:
+                return None
+
+            # Return the item at current index without advancing
+            media_id = self._playlist[self._playlist_index]
+            return self._media.get(media_id)
+
+    def peek_ahead_media(self, count: int) -> list:
+        """
+        Peek at the next N media items without advancing the playlist.
+
+        Used for pre-loading multiple upcoming photos.
+
+        Args:
+            count: Number of items to peek ahead.
+
+        Returns:
+            List of CachedMedia objects (may be shorter if playlist is smaller).
+        """
+        with self._lock:
+            if not self._playlist:
+                self._rebuild_playlist()
+
+            if not self._playlist:
+                return []
+
+            result = []
+            playlist_len = len(self._playlist)
+
+            for i in range(min(count, playlist_len)):
+                idx = (self._playlist_index + i) % playlist_len
+                media_id = self._playlist[idx]
+                media = self._media.get(media_id)
+                if media:
+                    result.append(media)
+
+            return result
+
     def get_previous_media(self) -> Optional[CachedMedia]:
         """
         Get the previous media item for display.
@@ -1540,3 +1595,330 @@ class CacheManager:
 
         logger.info(f"Extracted embedded captions for {updated} photos")
         return updated
+
+    # =========================================================================
+    # Rendered Frame Cache
+    # =========================================================================
+    # Pre-rendered display frames cached on disk for instant loading.
+    # Each frame is stored as a JPEG at native display resolution.
+
+    RENDERED_CACHE_DIR = "rendered"
+    RENDERED_CACHE_INFO_FILE = "cache_info.json"
+
+    def _get_rendered_cache_dir(self) -> Path:
+        """Get rendered cache directory, create if needed."""
+        if self._rendered_cache_dir is None:
+            self._rendered_cache_dir = self.cache_dir / self.RENDERED_CACHE_DIR
+        self._rendered_cache_dir.mkdir(parents=True, exist_ok=True)
+        return self._rendered_cache_dir
+
+    def _get_rendered_path(self, media_id: str) -> Path:
+        """Get path to rendered frame for a media item."""
+        return self._get_rendered_cache_dir() / f"{media_id}.jpg"
+
+    def _load_rendered_cache_info(self) -> Dict[str, Dict[str, Any]]:
+        """Load cache_info.json with resolution and per-photo crop hashes."""
+        if self._rendered_cache_info:
+            return self._rendered_cache_info
+
+        cache_info_path = self._get_rendered_cache_dir() / self.RENDERED_CACHE_INFO_FILE
+        if cache_info_path.exists():
+            try:
+                with open(cache_info_path, 'r') as f:
+                    data = json.load(f)
+                self._rendered_cache_info = data.get("photos", {})
+            except Exception as e:
+                logger.warning(f"Failed to load rendered cache info: {e}")
+                self._rendered_cache_info = {}
+        return self._rendered_cache_info
+
+    def _save_rendered_cache_info(self) -> None:
+        """Save cache_info.json atomically."""
+        cache_info_path = self._get_rendered_cache_dir() / self.RENDERED_CACHE_INFO_FILE
+        try:
+            data = {"photos": self._rendered_cache_info}
+            temp_path = str(cache_info_path) + '.tmp'
+            with open(temp_path, 'w') as f:
+                json.dump(data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, cache_info_path)
+        except Exception as e:
+            logger.error(f"Failed to save rendered cache info: {e}")
+
+    def _crop_region_hash(self, crop_region: Optional[Dict[str, Any]]) -> str:
+        """Hash a crop region for comparison.
+
+        Args:
+            crop_region: Crop region dict with x, y, width, height fields.
+
+        Returns:
+            8-character hash string, or "none" if no crop region.
+        """
+        if crop_region is None:
+            return "none"
+        # Create a stable string representation
+        crop_str = f"{crop_region.get('x', 0):.6f},{crop_region.get('y', 0):.6f}," \
+                   f"{crop_region.get('width', 1):.6f},{crop_region.get('height', 1):.6f}"
+        return hashlib.md5(crop_str.encode()).hexdigest()[:8]
+
+    def get_rendered_frame(
+        self,
+        media: CachedMedia,
+        screen_width: int,
+        screen_height: int,
+        params: DisplayParams
+    ) -> Optional[Image.Image]:
+        """
+        Get pre-rendered frame if valid, or None to trigger processing.
+
+        Checks if a cached rendered frame exists and is still valid by comparing:
+        1. Resolution (screen dimensions)
+        2. Crop region hash (from display params)
+
+        Args:
+            media: The cached media item.
+            screen_width: Current display width.
+            screen_height: Current display height.
+            params: Current display parameters (containing crop_region).
+
+        Returns:
+            PIL Image if cache hit, None if cache miss or invalid.
+        """
+        if not self.config.rendered_cache.enabled:
+            return None
+
+        rendered_path = self._get_rendered_path(media.media_id)
+        if not rendered_path.exists():
+            return None
+
+        # Load cache info
+        cache_info = self._load_rendered_cache_info()
+        stored_info = cache_info.get(media.media_id)
+
+        if stored_info is None:
+            # File exists but no cache info - treat as invalid
+            logger.debug(f"Rendered frame exists but no cache info for {media.media_id}")
+            try:
+                rendered_path.unlink()
+            except Exception:
+                pass
+            return None
+
+        # Compare resolution
+        stored_resolution = stored_info.get("resolution", [0, 0])
+        if stored_resolution != [screen_width, screen_height]:
+            logger.debug(
+                f"Resolution mismatch for {media.media_id}: "
+                f"stored={stored_resolution}, current=[{screen_width}, {screen_height}]"
+            )
+            # Delete stale file
+            try:
+                rendered_path.unlink()
+                del self._rendered_cache_info[media.media_id]
+                self._save_rendered_cache_info()
+            except Exception:
+                pass
+            return None
+
+        # Compare crop hash
+        current_crop_hash = self._crop_region_hash(
+            params.crop_region.to_dict() if params.crop_region else None
+        )
+        stored_crop_hash = stored_info.get("crop_hash", "")
+        if stored_crop_hash != current_crop_hash:
+            logger.debug(
+                f"Crop hash mismatch for {media.media_id}: "
+                f"stored={stored_crop_hash}, current={current_crop_hash}"
+            )
+            # Delete stale file
+            try:
+                rendered_path.unlink()
+                del self._rendered_cache_info[media.media_id]
+                self._save_rendered_cache_info()
+            except Exception:
+                pass
+            return None
+
+        # Cache hit - load the rendered frame
+        try:
+            frame = Image.open(rendered_path)
+            frame.load()  # Force load into memory
+            logger.debug(f"Rendered cache hit for {media.media_id}")
+            return frame
+        except Exception as e:
+            logger.warning(f"Failed to load rendered frame for {media.media_id}: {e}")
+            # Delete corrupt file
+            try:
+                rendered_path.unlink()
+                if media.media_id in self._rendered_cache_info:
+                    del self._rendered_cache_info[media.media_id]
+                    self._save_rendered_cache_info()
+            except Exception:
+                pass
+            return None
+
+    def save_rendered_frame(
+        self,
+        media: CachedMedia,
+        frame: Image.Image,
+        params: DisplayParams,
+        screen_width: int,
+        screen_height: int
+    ) -> None:
+        """
+        Save a rendered frame to disk cache.
+
+        Args:
+            media: The cached media item.
+            frame: PIL Image at display resolution.
+            params: Display parameters used (contains crop_region).
+            screen_width: Display width.
+            screen_height: Display height.
+        """
+        if not self.config.rendered_cache.enabled:
+            return
+
+        rendered_path = self._get_rendered_path(media.media_id)
+        quality = self.config.rendered_cache.quality
+
+        try:
+            # Ensure RGB mode for JPEG
+            if frame.mode != "RGB":
+                frame = frame.convert("RGB")
+
+            # Save as JPEG
+            frame.save(rendered_path, "JPEG", quality=quality, optimize=True)
+
+            # Update cache info
+            crop_hash = self._crop_region_hash(
+                params.crop_region.to_dict() if params.crop_region else None
+            )
+            size_bytes = rendered_path.stat().st_size
+
+            self._rendered_cache_info[media.media_id] = {
+                "resolution": [screen_width, screen_height],
+                "crop_hash": crop_hash,
+                "size_bytes": size_bytes
+            }
+            self._save_rendered_cache_info()
+
+            logger.debug(
+                f"Saved rendered frame for {media.media_id} "
+                f"({size_bytes / 1024 / 1024:.1f} MB)"
+            )
+
+            # Enforce size limit
+            self._enforce_rendered_cache_size()
+
+        except Exception as e:
+            logger.error(f"Failed to save rendered frame for {media.media_id}: {e}")
+
+    def clear_rendered_cache(self) -> int:
+        """
+        Delete entire rendered cache.
+
+        Returns:
+            Number of files deleted.
+        """
+        rendered_dir = self._get_rendered_cache_dir()
+        count = 0
+
+        # Delete all JPEG files
+        for jpg_file in rendered_dir.glob("*.jpg"):
+            try:
+                jpg_file.unlink()
+                count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete {jpg_file}: {e}")
+
+        # Clear cache info
+        self._rendered_cache_info = {}
+
+        # Delete cache_info.json
+        cache_info_path = rendered_dir / self.RENDERED_CACHE_INFO_FILE
+        if cache_info_path.exists():
+            try:
+                cache_info_path.unlink()
+            except Exception:
+                pass
+
+        logger.info(f"Cleared rendered cache: {count} files deleted")
+        return count
+
+    def _enforce_rendered_cache_size(self) -> None:
+        """Delete oldest rendered frames if cache exceeds max_size_mb. Skip if 0."""
+        max_size_mb = self.config.rendered_cache.max_size_mb
+        if max_size_mb <= 0:
+            return  # No limit
+
+        # Calculate current size from cache info
+        total_bytes = sum(
+            info.get("size_bytes", 0)
+            for info in self._rendered_cache_info.values()
+        )
+        total_mb = total_bytes / 1024 / 1024
+
+        if total_mb <= max_size_mb:
+            return  # Under limit
+
+        logger.info(
+            f"Rendered cache size ({total_mb:.1f} MB) exceeds limit ({max_size_mb} MB), "
+            f"cleaning up..."
+        )
+
+        rendered_dir = self._get_rendered_cache_dir()
+
+        # Get files sorted by mtime (oldest first)
+        files_with_mtime = []
+        for media_id in list(self._rendered_cache_info.keys()):
+            file_path = rendered_dir / f"{media_id}.jpg"
+            if file_path.exists():
+                try:
+                    mtime = file_path.stat().st_mtime
+                    size = self._rendered_cache_info[media_id].get("size_bytes", 0)
+                    files_with_mtime.append((media_id, file_path, mtime, size))
+                except Exception:
+                    pass
+
+        files_with_mtime.sort(key=lambda x: x[2])  # Sort by mtime
+
+        # Delete oldest files until under limit
+        deleted_count = 0
+        for media_id, file_path, _, size in files_with_mtime:
+            if total_mb <= max_size_mb:
+                break
+            try:
+                file_path.unlink()
+                total_bytes -= size
+                total_mb = total_bytes / 1024 / 1024
+                del self._rendered_cache_info[media_id]
+                deleted_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete {file_path}: {e}")
+
+        if deleted_count > 0:
+            self._save_rendered_cache_info()
+            logger.info(f"Deleted {deleted_count} old rendered frames")
+
+    def get_rendered_cache_stats(self) -> Dict[str, Any]:
+        """Get statistics about the rendered cache.
+
+        Returns:
+            Dict with count, total_size_mb, and enabled status.
+        """
+        if not self.config.rendered_cache.enabled:
+            return {"enabled": False, "count": 0, "total_size_mb": 0}
+
+        cache_info = self._load_rendered_cache_info()
+        total_bytes = sum(
+            info.get("size_bytes", 0)
+            for info in cache_info.values()
+        )
+
+        return {
+            "enabled": True,
+            "count": len(cache_info),
+            "total_size_mb": round(total_bytes / 1024 / 1024, 1),
+            "max_size_mb": self.config.rendered_cache.max_size_mb
+        }

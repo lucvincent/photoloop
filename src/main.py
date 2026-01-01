@@ -14,7 +14,8 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+from PIL import Image
 
 # Initialize logging early
 logging.basicConfig(
@@ -169,7 +170,16 @@ class PhotoLoop:
         from .remote_input import RemoteInputHandler, RemoteAction
 
         def handle_remote_action(action: RemoteAction):
-            """Map remote actions to control requests."""
+            """Map remote actions to control requests.
+
+            If slideshow is stopped (force_off), any button press wakes it up.
+            """
+            # Check if slideshow is stopped - any button wakes it up
+            if self.scheduler and self.scheduler.get_current_state().value == 'force_off':
+                logger.info(f"Remote button pressed while stopped - waking slideshow")
+                self._on_control_request('start')
+                return
+
             action_map = {
                 RemoteAction.NEXT: 'next',
                 RemoteAction.PREVIOUS: 'prev',
@@ -180,8 +190,22 @@ class PhotoLoop:
             if control_action:
                 self._on_control_request(control_action)
 
+        def handle_remote_reconnect():
+            """Handle remote reconnecting after being disconnected.
+
+            When the remote sleeps and the user presses a button to wake it,
+            the button press is lost by the time the device reconnects.
+            If slideshow is stopped, we treat the reconnect as a wake request.
+            """
+            if self.scheduler and self.scheduler.get_current_state().value == 'force_off':
+                logger.info("Remote reconnected while stopped - waking slideshow")
+                self._on_control_request('start')
+
         try:
-            self.remote_handler = RemoteInputHandler(action_callback=handle_remote_action)
+            self.remote_handler = RemoteInputHandler(
+                action_callback=handle_remote_action,
+                reconnect_callback=handle_remote_reconnect
+            )
             if self.remote_handler.start():
                 logger.info("Remote input handler started")
             else:
@@ -482,6 +506,12 @@ class PhotoLoop:
                     # Skip/previous requests bypass duration and transition checks
                     go_next = self.display.is_skip_requested()
                     go_previous = self.display.is_previous_requested()
+
+                    # Show arrow feedback immediately (user needs visual confirmation)
+                    # The arrow will continue showing during the transition
+                    if go_next or go_previous:
+                        self.display.update()
+
                     if (current_media is None or
                         go_next or
                         go_previous or
@@ -493,21 +523,62 @@ class PhotoLoop:
                             next_media = self.cache_manager.get_previous_media()
                         else:
                             next_media = self.cache_manager.get_next_media()
+
                         if next_media:
-                            # Compute display parameters
+                            is_manual = go_next or go_previous
+
+                            # Get display params (cheap - uses cached face detection + crop)
                             params = self.cache_manager.get_display_params(
                                 next_media,
                                 self.display.screen_width,
                                 self.display.screen_height
                             )
-                            # Show the photo
-                            self.display.show_photo(
+
+                            # Try rendered cache first (compares resolution + crop_hash)
+                            rendered_frame = self.cache_manager.get_rendered_frame(
                                 next_media,
-                                params,
-                                transition=(current_media is not None)
+                                self.display.screen_width,
+                                self.display.screen_height,
+                                params
                             )
+
+                            if rendered_frame is not None:
+                                # Cache hit - instant display
+                                logger.info(f"Rendered cache hit: {os.path.basename(next_media.local_path)}")
+                                self.display.show_preloaded_photo(
+                                    next_media,
+                                    params,
+                                    rendered_frame,
+                                    transition=(current_media is not None),
+                                    manual_nav=is_manual
+                                )
+                            else:
+                                # Cache miss - process and save
+                                # Extend overlay duration for manual nav to cover processing time
+                                if is_manual:
+                                    self.display.extend_feedback_duration(0.5)
+                                frame = self.display._processor.prepare_image_for_display(
+                                    next_media.local_path,
+                                    params
+                                )
+                                self.display.show_preloaded_photo(
+                                    next_media,
+                                    params,
+                                    frame,
+                                    transition=(current_media is not None),
+                                    manual_nav=is_manual
+                                )
+                                # Save to rendered cache for next time
+                                self.cache_manager.save_rendered_frame(
+                                    next_media,
+                                    frame,
+                                    params,
+                                    self.display.screen_width,
+                                    self.display.screen_height
+                                )
+
                             current_media = next_media
-                            logger.info(f"Displaying photo: {os.path.basename(next_media.local_path)}")
+                            logger.info(f"Displaying: {os.path.basename(next_media.local_path)}")
                         elif current_media is None:
                             logger.warning("No media available to display")
                 elif not has_albums:
