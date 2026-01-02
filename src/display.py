@@ -880,7 +880,7 @@ class Display:
         # Google caption/description from Google Photos DOM
         if "google_caption" in source_priorities:
             value = self._current_media.google_caption
-            if value and value.lower() not in invalid_values:
+            if value and value.lower() not in invalid_values and not is_camera_info(value):
                 add_if_unique(source_priorities["google_caption"], value)
 
         # Embedded EXIF/IPTC caption from photo file
