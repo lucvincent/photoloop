@@ -61,11 +61,6 @@
                     <button id="btn-stop" class="btn btn-danger">Stop</button>
                 </div>
                 <span id="no-content-msg" class="help-text" style="display: none; color: var(--warning);">Enable albums and sync to download photos.</span>
-                <label class="checkbox-inline">
-                    <input type="checkbox" id="schedule-enabled-control"
-                           {% if config.schedule.enabled %}checked{% endif %}>
-                    Schedule Enabled
-                </label>
             </div>
 
             <div class="status-box" style="margin-top: 20px;">
@@ -219,7 +214,13 @@
         <!-- Schedule Tab -->
         <section id="schedule" class="tab-content">
             <h2>Schedule Settings</h2>
-            <p class="hint">Changes take effect immediately after saving. However Slideshow Control must be used to enable/disable the schedule.</p>
+            <p class="hint">Changes take effect immediately after saving.</p>
+
+            <label class="checkbox-inline" style="margin-bottom: 20px; display: block;">
+                <input type="checkbox" id="schedule-enabled-control"
+                       {% if config.schedule.enabled %}checked{% endif %}>
+                Schedule Enabled
+            </label>
 
             <h3>Weekday Schedule (Mon-Fri)</h3>
             <div class="time-range">
