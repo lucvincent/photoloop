@@ -123,27 +123,39 @@ sleeps, so SDL2 continues to work properly.
 5. SDL2 renderer is recreated to clear corrupted GPU state (see below)
 6. Slideshow resumes at correct resolution
 
-**Critical: DPMS Wake GPU State Corruption (Jan 2025)**
+**Critical: DPMS Wake GPU State Corruption (Jan 2025) - FIXED**
 
 After DPMS standby, SDL2's internal GPU state can become corrupted even though the
 API reports correct dimensions. This causes the "quarter-screen bug" where photos
 render in only the top-left quarter of the display.
 
-**Symptoms:**
-- Photos render in top-left quarter of screen after Stop/Start
-- Logs show correct dimensions (3840x2160) but display is wrong
-- Service restart fixes it
+**Root cause (discovered Jan 2026):**
+The bug is a **race condition with compositor stabilization**. After DPMS wake, the
+labwc compositor continues adjusting GPU buffer sizes even after renderer recreation.
+The bug was non-deterministic (~50% of the time):
+- Sometimes first photo buggy → second fixes it (compositor wasn't ready initially)
+- Sometimes first photo OK → second buggy (compositor made deferred adjustments)
 
-**Root cause:**
-- SDL2 initially reports wrong window size after DPMS wake (e.g., 1920x1080 on 4K)
-- Fullscreen toggle fixes the window size
-- BUT the renderer's internal GPU buffers remain at wrong size
-- Drawing to (0, 0, 3840, 2160) only fills quarter of actual screen
+**Solution implemented (Jan 2026):**
+Extended "GPU burn-in" period after DPMS wake. Render ~45 frames of solid black
+(~1.5 seconds) to force the compositor to fully commit buffer sizes before
+displaying actual photo content.
 
-**Solution implemented:**
-- Always recreate the SDL2 renderer after DPMS wake (`force_recreate=True`)
-- This clears corrupted GPU state regardless of whether dimensions "look" correct
-- Located in `_refresh_display_dimensions()` called from `show_photo()`
+**Wake sequence in `_wake_display_if_needed()`:**
+1. Turn display on (`wlopm --on`)
+2. Brief delay (0.3s) for display to physically wake
+3. Recreate renderer (`_refresh_display_dimensions(force_recreate=True)`)
+4. GPU burn-in: 45 black frames at 30fps (~1.5s)
+5. Then display first photo with normal priming
+
+**Known issue:** Desktop may be visible for several seconds between display wake and
+slideshow starting. This is cosmetic. Attempted fix (fullscreen toggle before
+renderer recreation) caused the quarter-screen bug to return - needs different approach.
+
+**Previous failed attempts (for reference):**
+1. Recreate renderer only - partial fix (first photo works, second breaks)
+2. Skip transitions after wake - didn't address root cause
+3. Pre-render while display off - vsync blocks, causes long delays
 
 **Note:** Even on fresh service start, SDL2 initially reports 1920x1080 for a 4K
 display. The mismatch detection and renderer recreation is needed every time.

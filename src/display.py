@@ -168,7 +168,6 @@ class Display:
 
         # Track display power state
         self._display_powered = True
-        self._dpms_wake_pending = False  # Track if renderer recreation needed after DPMS wake
 
         # Photo control state
         self._paused = False
@@ -428,17 +427,12 @@ class Display:
             transition: Whether to use transition effect.
             manual_nav: If True, this is manual navigation (next/prev button).
                        Uses faster transition for snappier feel.
+
+        Note: Display wake is handled by _wake_display_if_needed() - the single
+        place for DPMS wake logic. Called here right before displaying content.
         """
-        # Turn display back on if it was off
-        if not self._display_powered:
-            self._set_display_power(True)
-            # Wait for display to wake from DPMS standby
-            # Needs enough time for compositor to stabilize before querying dimensions
-            time.sleep(0.5)
-            # Force recreate renderer after DPMS wake - GPU state can be corrupted
-            # even when dimensions appear unchanged
-            self._refresh_display_dimensions(force_recreate=True)
-            self._dpms_wake_pending = False
+        # Wake display right before showing content (avoids empty screen delay)
+        self._wake_display_if_needed()
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
@@ -559,14 +553,12 @@ class Display:
             frame: Pre-processed PIL Image ready for texture.
             transition: Whether to use transition effect.
             manual_nav: If True, use faster transition.
+
+        Note: Display wake is handled by _wake_display_if_needed() - the single
+        place for DPMS wake logic. Called here right before displaying content.
         """
-        # Turn display back on if it was off
-        if not self._display_powered:
-            self._set_display_power(True)
-            time.sleep(0.5)
-            # Force recreate renderer after DPMS wake - GPU state can be corrupted
-            self._refresh_display_dimensions(force_recreate=True)
-            self._dpms_wake_pending = False
+        # Wake display right before showing content (avoids empty screen delay)
+        self._wake_display_if_needed()
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
@@ -773,13 +765,15 @@ class Display:
         self._transition_frames += 1
 
         if progress >= 1.0:
+            # Transition complete - swap textures
             self._current_texture = self._next_texture
             self._next_texture = None
             self._transitioning = False
-            self._renderer.draw_color = self._bg_color
-            self._renderer.clear()
-            self._current_texture.draw(dstrect=(0, 0, self.screen_width, self.screen_height))
-            self._render_feedback()  # Show any active feedback overlay
+            self._needs_redraw = True  # Ensure next update() renders via _render_slideshow()
+
+            # Don't render here - let update() loop handle it via _render_slideshow()
+            # This ensures the SAME code path as the working first-photo case,
+            # which fixes the quarter-screen bug after DPMS wake.
             return
 
         self._renderer.draw_color = self._bg_color
@@ -1187,6 +1181,7 @@ class Display:
                           dimensions appear unchanged. Needed after DPMS wake
                           where GPU state can be corrupted.
         """
+        logger.debug(f"Refreshing display dimensions (force_recreate={force_recreate})")
         new_width, new_height = self._window.size
 
         # Log current renderer state for debugging
@@ -1419,11 +1414,7 @@ class Display:
         Args:
             on: True to turn display on, False to turn off.
         """
-        # Mark that renderer recreation is needed when waking from DPMS
-        if on and not self._display_powered:
-            self._dpms_wake_pending = True
-            logger.debug("DPMS wake pending - will recreate renderer")
-
+        logger.debug(f"Setting display power: {on} (current: {self._display_powered})")
         self._display_powered = on
 
         power_method = self.config.display.power_control.lower()
@@ -1474,6 +1465,7 @@ class Display:
 
     def show_black(self) -> None:
         """Show black screen and turn off display to save power."""
+        logger.debug(f"show_black() called, mode={self.mode.value}, display_powered={self._display_powered}")
         if self.mode != DisplayMode.BLACK:
             self._needs_redraw = True
         self.mode = DisplayMode.BLACK
@@ -1481,42 +1473,84 @@ class Display:
 
         # Turn off physical display to save electricity
         if self._display_powered:
+            logger.debug("show_black: turning off display power")
             self._set_display_power(False)
 
     def show_clock(self) -> None:
-        """Show clock display."""
-        # Turn display back on if it was off
-        if not self._display_powered:
-            self._set_display_power(True)
-            time.sleep(0.5)
-            # Force recreate renderer after DPMS wake - GPU state can be corrupted
-            self._refresh_display_dimensions(force_recreate=True)
-            self._dpms_wake_pending = False
+        """Show clock display.
 
+        Note: This is now only called internally. External callers should use
+        set_mode(DisplayMode.CLOCK) which handles display power management.
+        """
         if self.mode != DisplayMode.CLOCK:
             self._needs_redraw = True
         self.mode = DisplayMode.CLOCK
         self._source_texture = None
 
     def set_mode(self, mode: DisplayMode) -> None:
-        """Set the display mode."""
+        """Set the display mode.
+
+        Note: This only sets the mode flag. Display wake from DPMS happens in
+        show_photo()/show_preloaded_photo() right before content is displayed,
+        to avoid showing empty screen while loading.
+        """
+        logger.debug(f"set_mode({mode.value}) called, current={self.mode.value}")
         if mode == DisplayMode.BLACK:
             self.show_black()
         elif mode == DisplayMode.CLOCK:
-            self.show_clock()
+            # CLOCK mode means off_hours_mode='clock' - display stays on during off-hours
+            # No wake needed since we never go BLACK → CLOCK
+            if self.mode != DisplayMode.CLOCK:
+                self._needs_redraw = True
+            self.mode = DisplayMode.CLOCK
+            self._source_texture = None
         elif mode == DisplayMode.SLIDESHOW:
+            # Just set mode - wake happens in show_photo()/show_preloaded_photo()
             if self.mode != DisplayMode.SLIDESHOW:
                 self._needs_redraw = True
-                # Verify display dimensions when coming back to slideshow
-                # (display manager may have altered window during off-hours)
-                # Force renderer recreation if waking from DPMS to fix GPU state corruption
-                force_recreate = self._dpms_wake_pending
-                if force_recreate:
-                    logger.info("Forcing renderer recreation after DPMS wake")
-                    time.sleep(0.5)  # Wait for display to stabilize
-                self._refresh_display_dimensions(force_recreate=force_recreate)
-                self._dpms_wake_pending = False
             self.mode = DisplayMode.SLIDESHOW
+
+    def _wake_display_if_needed(self) -> None:
+        """Wake display from DPMS standby if powered off.
+
+        This is the SINGLE place where display wake + renderer recreation happens.
+        Called by show_photo() and show_preloaded_photo() right before displaying.
+
+        TODO: Desktop may be visible for several seconds during wake sequence.
+        The SDL2 window loses foreground/fullscreen state during DPMS standby.
+        Attempted fix (fullscreen toggle before renderer recreation) caused the
+        quarter-screen bug to return. Need to find a way to bring window to
+        foreground without disrupting renderer state. Possible approaches:
+        - Fullscreen toggle AFTER burn-in completes
+        - Use wlrctl or labwc IPC to raise window
+        - Render to a secondary buffer and flip
+        """
+        if not self._display_powered:
+            logger.info("Waking display from DPMS standby")
+
+            # Turn display on first
+            self._set_display_power(True)
+
+            # Brief delay for display to physically wake
+            time.sleep(0.3)
+
+            # Recreate renderer - GPU state may be corrupted after DPMS
+            logger.info("Recreating renderer after DPMS wake")
+            self._refresh_display_dimensions(force_recreate=True)
+
+            # GPU burn-in: Render black frames to stabilize compositor buffers
+            # This fixes the quarter-screen bug by forcing compositor to commit
+            # buffer sizes before we render actual content. Without this, the
+            # compositor may still be adjusting during photo display, causing
+            # photos to render in only the top-left quarter of the screen.
+            logger.info("GPU burn-in after DPMS wake")
+            burn_in_frames = 45  # ~1.5 seconds at 30fps
+            for _ in range(burn_in_frames):
+                self._renderer.draw_color = self._bg_color
+                self._renderer.clear()
+                self._renderer.present()
+                time.sleep(1.0 / 30)
+            logger.info("GPU burn-in complete")
 
     def is_transition_complete(self) -> bool:
         """Check if current transition is complete."""
