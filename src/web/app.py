@@ -467,13 +467,13 @@ def create_app(
     @app.route('/api/control/<action>', methods=['POST'])
     def api_control(action: str):
         """Control the slideshow."""
-        valid_actions = ['start', 'stop', 'resume', 'next', 'prev', 'pause', 'toggle_pause', 'reload', 'start_temp']
+        valid_actions = ['start', 'stop', 'resume', 'next', 'prev', 'pause', 'toggle_pause', 'reload']
 
         if action not in valid_actions:
             return jsonify({"error": f"Invalid action. Valid: {valid_actions}"}), 400
 
         try:
-            if app.on_control_request and action != 'start_temp':
+            if app.on_control_request:
                 app.on_control_request(action)
                 return jsonify({"success": True, "action": action})
             elif app.scheduler:
@@ -484,14 +484,6 @@ def create_app(
                     app.scheduler.force_off()
                 elif action == 'resume':
                     app.scheduler.clear_override()
-                elif action == 'start_temp':
-                    # Temporary override until next scheduled end time
-                    until = app.scheduler.force_on_temporarily()
-                    return jsonify({
-                        "success": True,
-                        "action": action,
-                        "until": until.isoformat() if until else None
-                    })
                 return jsonify({"success": True, "action": action})
             else:
                 return jsonify({"error": "Control not available"}), 503

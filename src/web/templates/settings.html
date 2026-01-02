@@ -59,17 +59,12 @@
                 <div class="control-buttons" style="margin: 0;">
                     <button id="btn-start" class="btn btn-success">Start</button>
                     <button id="btn-stop" class="btn btn-danger">Stop</button>
-                    <button id="btn-pause-schedule" class="btn btn-primary" style="display: none;">Pause Schedule</button>
                 </div>
                 <label class="checkbox-inline">
                     <input type="checkbox" id="schedule-enabled-control"
                            {% if config.schedule.enabled %}checked{% endif %}>
                     Schedule Enabled
                 </label>
-            </div>
-            <div id="temp-override-info" class="help-text" style="display: none; color: var(--warning);">
-                <strong>Temporary override active.</strong> Slideshow will resume normal schedule at <span id="temp-override-until">-</span>.
-                <button id="btn-resume-schedule" class="btn btn-small" style="margin-left: 10px;">Resume Schedule Now</button>
             </div>
 
             <div class="status-box" style="margin-top: 20px;">
@@ -415,34 +410,6 @@
                     document.getElementById('schedule-enabled-control').checked = status.schedule_enabled;
                 }
 
-                // Show/hide pause schedule button based on schedule enabled and state
-                const tempOverrideInfo = document.getElementById('temp-override-info');
-                const pauseScheduleBtn = document.getElementById('btn-pause-schedule');
-
-                if (status.schedule_enabled) {
-                    // Check for temporary override
-                    if (status.schedule && status.schedule.has_temporary_override) {
-                        tempOverrideInfo.style.display = 'block';
-                        pauseScheduleBtn.style.display = 'none';
-
-                        // Format the expiration time
-                        const until = new Date(status.schedule.temporary_override_until);
-                        document.getElementById('temp-override-until').textContent = until.toLocaleString();
-                    } else {
-                        tempOverrideInfo.style.display = 'none';
-                        // Only show Pause Schedule button during off-hours
-                        const state = status.schedule.state;
-                        if (state === 'off_hours') {
-                            pauseScheduleBtn.style.display = 'inline-block';
-                        } else {
-                            pauseScheduleBtn.style.display = 'none';
-                        }
-                    }
-                } else {
-                    pauseScheduleBtn.style.display = 'none';
-                    tempOverrideInfo.style.display = 'none';
-                }
-
                 // Update photo control pause button
                 if (status.photo_control) {
                     const pauseBtn = document.getElementById('btn-pause');
@@ -727,18 +694,6 @@
         document.getElementById('schedule-enabled-control').addEventListener('change', async (e) => {
             const enabled = e.target.checked;
             await apiCall('/api/schedule/enabled', 'POST', { enabled });
-            setTimeout(loadStatus, 500);
-        });
-
-        // Pause Schedule button - temporary override
-        document.getElementById('btn-pause-schedule').addEventListener('click', async () => {
-            await apiCall('/api/control/start_temp', 'POST');
-            setTimeout(loadStatus, 500);
-        });
-
-        // Resume Schedule button - clear temporary override
-        document.getElementById('btn-resume-schedule').addEventListener('click', async () => {
-            await apiCall('/api/control/resume', 'POST');
             setTimeout(loadStatus, 500);
         });
 

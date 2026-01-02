@@ -1,7 +1,7 @@
 // PhotoLoop Service Worker
 // Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 
-const CACHE_NAME = 'photoloop-v5';
+const CACHE_NAME = 'photoloop-v6';
 const STATIC_ASSETS = [
   '/',
   '/static/style.css',
