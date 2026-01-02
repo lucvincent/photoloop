@@ -819,6 +819,9 @@ class CacheManager:
                         stats["new"] += 1
                         self._sync_progress.downloads_done += 1
 
+                        # Rebuild playlist immediately so new photo can be displayed
+                        self._rebuild_playlist()
+
                         # Log progress for new items
                         if self._sync_progress.downloads_done % 10 == 0 or source_type == "local":
                             logger.info(f"Progress: {self._sync_progress.downloads_done}/{self._sync_progress.downloads_total} items processed")
