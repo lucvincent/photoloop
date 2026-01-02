@@ -347,6 +347,8 @@ class MetadataExtractor:
             "LEICA",
             "PENTAX",
             "RICOH",
+            "APPLE",
+            "IPHONE",
         ]
 
         for pattern in camera_info_patterns:

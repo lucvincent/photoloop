@@ -854,6 +854,7 @@ class Display:
             # Common camera brands that appear as standalone "captions"
             'OLYMPUS', 'FUJIFILM', 'FUJI', 'CANON', 'NIKON', 'SONY',
             'SAMSUNG', 'PANASONIC', 'KODAK', 'LEICA', 'PENTAX', 'RICOH',
+            'APPLE', 'IPHONE',
         ]
 
         def is_camera_info(caption: str) -> bool:

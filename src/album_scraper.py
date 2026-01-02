@@ -960,6 +960,7 @@ class AlbumScraper:
                 r'^Google Pixel',            # Google phones
                 r'^Pixel \d',                # Pixel phones
                 r'^iPhone',                  # Apple phones
+                r'^Apple iPhone',            # Apple phones (alternate format)
                 r'^Samsung Galaxy',          # Samsung phones
                 r'^Galaxy [A-Z]',            # Samsung phones
                 r'^Canon EOS',               # Canon cameras
