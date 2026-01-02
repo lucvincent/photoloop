@@ -523,7 +523,7 @@ def create_app(
 
     @app.route('/api/schedule', methods=['POST'])
     def api_save_schedule():
-        """Save schedule settings (times and off-hours mode)."""
+        """Save schedule settings (times, off-hours mode, clock, weather, news)."""
         try:
             data = request.get_json()
             if data is None:
@@ -531,6 +531,8 @@ def create_app(
 
             config_path = app.photoloop_config.config_path
             if config_path:
+                updates = {}
+
                 # Build schedule updates
                 schedule_updates = {}
 
@@ -554,9 +556,51 @@ def create_app(
                 if 'off_hours_mode' in data:
                     schedule_updates['off_hours_mode'] = data['off_hours_mode']
 
-                # Save to config file (preserves comments)
                 if schedule_updates:
-                    save_config_partial(config_path, {'schedule': schedule_updates})
+                    updates['schedule'] = schedule_updates
+
+                # Build clock updates
+                clock_updates = {}
+                if 'clock_style' in data:
+                    clock_updates['style'] = data['clock_style']
+                if 'clock_size' in data:
+                    clock_updates['size'] = data['clock_size']
+                if 'clock_show_date' in data:
+                    clock_updates['show_date'] = bool(data['clock_show_date'])
+                if clock_updates:
+                    updates['clock'] = clock_updates
+
+                # Build weather updates
+                weather_updates = {}
+                if 'weather_enabled' in data:
+                    weather_updates['enabled'] = bool(data['weather_enabled'])
+                if 'weather_city' in data:
+                    weather_updates['city_name'] = data['weather_city']
+                if 'weather_latitude' in data:
+                    lat = data['weather_latitude']
+                    weather_updates['latitude'] = float(lat) if lat else None
+                if 'weather_longitude' in data:
+                    lon = data['weather_longitude']
+                    weather_updates['longitude'] = float(lon) if lon else None
+                if 'weather_units' in data:
+                    weather_updates['units'] = data['weather_units']
+                if weather_updates:
+                    updates['weather'] = weather_updates
+
+                # Build news updates
+                news_updates = {}
+                if 'news_enabled' in data:
+                    news_updates['enabled'] = bool(data['news_enabled'])
+                if 'news_feed_urls' in data:
+                    news_updates['feed_urls'] = data['news_feed_urls']
+                if 'news_rotate_interval' in data:
+                    news_updates['rotate_interval_seconds'] = int(data['news_rotate_interval'])
+                if news_updates:
+                    updates['news'] = news_updates
+
+                # Save to config file (preserves comments)
+                if updates:
+                    save_config_partial(config_path, updates)
 
             # Notify of config change
             if app.on_config_change:

@@ -18,6 +18,7 @@ import pygame._sdl2 as sdl2
 from PIL import Image
 
 from .cache_manager import CachedMedia
+from .clock import ClockRenderer
 from .config import PhotoLoopConfig, OverlayConfig
 from .image_processor import DisplayParams, ImageProcessor, KenBurnsAnimation
 from .metadata import format_date, reverse_geocode
@@ -161,6 +162,9 @@ class Display:
         # Fonts for overlay and clock
         self._init_fonts()
 
+        # Clock renderer (lazy initialized when first needed)
+        self._clock_renderer = None
+
         # For compatibility with old code
         self.screen = None  # Not used with texture rendering
         self.clock = pygame.time.Clock()
@@ -268,6 +272,16 @@ class Display:
         self._init_fonts()
         self._init_feedback_fonts()
         self._needs_redraw = True  # Force redraw to show new font size
+
+    def reload_clock_config(self) -> None:
+        """Reload clock configuration when settings change via web UI."""
+        if self._clock_renderer is not None:
+            self._clock_renderer.update_config(
+                clock_config=self.config.clock,
+                weather_config=self.config.weather,
+                news_config=self.config.news
+            )
+            logger.info("Clock configuration reloaded")
 
     def _init_feedback_fonts(self) -> None:
         """Initialize resolution-scaled fonts for feedback overlays.
@@ -1040,30 +1054,24 @@ class Display:
         return lines
 
     def _render_clock(self) -> None:
-        """Render clock display."""
-        self._renderer.draw_color = (0, 0, 0, 255)
-        self._renderer.clear()
+        """Render clock display using the configurable ClockRenderer."""
+        # Lazy initialize the clock renderer
+        if self._clock_renderer is None:
+            # Clear to black immediately to avoid showing stale slideshow content
+            self._renderer.draw_color = (0, 0, 0, 255)
+            self._renderer.clear()
+            self._renderer.present()
 
-        now = datetime.now()
-        time_str = now.strftime("%H:%M")
-        date_str = now.strftime("%A, %B %d")
-
-        # Render time
-        time_surface = self._clock_font.render(time_str, True, (255, 255, 255))
-        time_texture = self._surface_to_texture(time_surface)
-        time_w, time_h = time_surface.get_size()
-        time_x = (self.screen_width - time_w) // 2
-        time_y = (self.screen_height - time_h) // 2 - 50
-        time_texture.draw(dstrect=(time_x, time_y, time_w, time_h))
-
-        # Render date
-        date_font = pygame.font.SysFont(None, 48)
-        date_surface = date_font.render(date_str, True, (200, 200, 200))
-        date_texture = self._surface_to_texture(date_surface)
-        date_w, date_h = date_surface.get_size()
-        date_x = (self.screen_width - date_w) // 2
-        date_y = time_y + time_h + 20
-        date_texture.draw(dstrect=(date_x, date_y, date_w, date_h))
+            self._clock_renderer = ClockRenderer(
+                renderer=self._renderer,
+                screen_width=self.screen_width,
+                screen_height=self.screen_height,
+                clock_config=self.config.clock,
+                weather_config=self.config.weather,
+                news_config=self.config.news,
+                surface_to_texture_fn=self._surface_to_texture
+            )
+        self._clock_renderer.render()
 
     def _recreate_renderer(self) -> None:
         """
@@ -1131,6 +1139,11 @@ class Display:
             ken_burns_pan_speed=self.config.ken_burns.pan_speed,
             ken_burns_randomize=self.config.ken_burns.randomize
         )
+
+        # Update clock renderer with new renderer and dimensions (if initialized)
+        if self._clock_renderer is not None:
+            self._clock_renderer.update_renderer(self._renderer)
+            self._clock_renderer.update_dimensions(self.screen_width, self.screen_height)
 
         logger.info("Renderer recreated successfully")
 

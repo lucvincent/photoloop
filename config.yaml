@@ -440,6 +440,104 @@ web:
   # Change <port>8080</port> to match your new port, then restart avahi:
   #   sudo systemctl restart avahi-daemon
 
+# ------------------------------------------------------------
+# Clock Display - Shown during off-hours when off_hours_mode: "clock"
+# ------------------------------------------------------------
+# Customize the appearance of the clock shown during scheduled off-hours.
+# The clock includes burn-in prevention (subtle position drift) for OLED displays.
+clock:
+  # Clock style - determines the visual appearance of the clock
+  # Options:
+  #   "digital_24h"    - Digital clock with 24-hour format (e.g., 14:30)
+  #   "digital_12h"    - Digital clock with 12-hour format (e.g., 2:30 PM)
+  #   "digital_seconds"- Digital clock showing seconds (e.g., 14:30:45)
+  #   "digital_large"  - Extra large digital display for visibility from distance
+  #   "analog_classic" - Traditional round clock face with hour numbers
+  #   "analog_modern"  - Minimalist analog clock without numbers
+  #   "minimal_time"   - Clean, minimalist time display
+  #   "minimal_date"   - Clean, minimalist date display
+  style: "digital_24h"
+
+  # Size - controls the size of clock, weather, and news text
+  # Options: "small", "medium", "large"
+  # All display elements scale together for visual consistency
+  size: "medium"
+
+  # Whether to show the current date below the time
+  show_date: true
+
+# ------------------------------------------------------------
+# Weather Display - Optional weather overlay on clock screen
+# ------------------------------------------------------------
+# Shows current temperature and conditions on the clock display.
+# Uses Open-Meteo API (free, no API key required).
+weather:
+  # Enable/disable weather display
+  enabled: false
+
+  # Location name (for display purposes only, not used for lookup)
+  city_name: ""
+
+  # GPS coordinates for weather data
+  # Find your coordinates: https://www.latlong.net/ or Google Maps
+  # Right-click any location in Google Maps and select the coordinates
+  #
+  # Format: Decimal degrees (not degrees/minutes/seconds)
+  # Example coordinates:
+  #   New York City:    latitude: 40.7128,    longitude: -74.0060
+  #   Los Angeles:      latitude: 34.0522,    longitude: -118.2437
+  #   London:           latitude: 51.5074,    longitude: -0.1278
+  #   Tokyo:            latitude: 35.6762,    longitude: 139.6503
+  latitude: null
+  longitude: null
+
+  # Temperature units: "fahrenheit" or "celsius"
+  units: "fahrenheit"
+
+  # How often to refresh weather data (in minutes)
+  # Weather doesn't change quickly, so 30-60 minutes is usually sufficient
+  update_interval_minutes: 30
+
+# ------------------------------------------------------------
+# News Headlines - Optional news ticker on clock screen
+# ------------------------------------------------------------
+# Shows rotating news headlines from RSS feeds on the clock display.
+news:
+  # Enable/disable news headlines
+  enabled: false
+
+  # RSS feed URLs to fetch headlines from
+  # Most news sites provide RSS feeds. Common examples:
+  #
+  # General News:
+  #   - "https://feeds.bbci.co.uk/news/rss.xml"           # BBC News
+  #   - "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"  # NY Times
+  #   - "https://feeds.npr.org/1001/rss.xml"              # NPR News
+  #   - "https://www.theguardian.com/world/rss"           # The Guardian
+  #
+  # Technology:
+  #   - "https://feeds.arstechnica.com/arstechnica/index" # Ars Technica
+  #   - "https://www.wired.com/feed/rss"                  # Wired
+  #   - "https://techcrunch.com/feed/"                    # TechCrunch
+  #
+  # To find RSS feeds for other sites:
+  #   1. Look for RSS/feed icon on the website
+  #   2. Search "[site name] RSS feed"
+  #   3. Try adding /rss or /feed to the site URL
+  #
+  # Format: List of URLs, one per line with leading dash
+  feed_urls: []
+  # Example with feeds:
+  # feed_urls:
+  #   - "https://feeds.bbci.co.uk/news/rss.xml"
+  #   - "https://feeds.npr.org/1001/rss.xml"
+
+  # How long to show each headline before rotating (in seconds)
+  rotate_interval_seconds: 10
+
+  # Maximum number of headlines to keep in rotation
+  max_headlines: 5
+
 # ============================================================
 # Quick Start Guide
 # ============================================================

@@ -210,6 +210,45 @@ class LocalAlbumsConfig:
 
 
 @dataclass
+class ClockConfig:
+    """Clock display settings (shown during off-hours when mode is 'clock')."""
+    # Clock style: digital_24h, digital_12h, digital_seconds, digital_large,
+    #              analog_classic, analog_modern, minimal_time, minimal_date
+    style: str = "digital_24h"
+    # Size preset: small, medium, large
+    size: str = "medium"
+    # Whether to show the date below the clock
+    show_date: bool = True
+
+
+@dataclass
+class WeatherConfig:
+    """Weather display settings for clock mode."""
+    enabled: bool = False
+    # Location coordinates (use a geocoding service or Google Maps to find these)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    # City name to display (optional)
+    city_name: str = ""
+    # Temperature units: fahrenheit, celsius
+    units: str = "fahrenheit"
+    # How often to fetch weather data (minutes)
+    update_interval_minutes: int = 30
+
+
+@dataclass
+class NewsConfig:
+    """News headlines settings for clock mode."""
+    enabled: bool = False
+    # RSS feed URLs to fetch headlines from
+    feed_urls: List[str] = field(default_factory=list)
+    # Maximum number of headlines to cache
+    max_headlines: int = 5
+    # How often to rotate to next headline (seconds)
+    rotate_interval_seconds: int = 10
+
+
+@dataclass
 class PhotoLoopConfig:
     """Main configuration class."""
     albums: List[AlbumConfig] = field(default_factory=list)
@@ -223,6 +262,9 @@ class PhotoLoopConfig:
     web: WebConfig = field(default_factory=WebConfig)
     local_albums: LocalAlbumsConfig = field(default_factory=LocalAlbumsConfig)
     rendered_cache: RenderedCacheConfig = field(default_factory=RenderedCacheConfig)
+    clock: ClockConfig = field(default_factory=ClockConfig)
+    weather: WeatherConfig = field(default_factory=WeatherConfig)
+    news: NewsConfig = field(default_factory=NewsConfig)
 
     # Runtime state (not persisted)
     config_path: Optional[str] = None
@@ -320,6 +362,9 @@ def load_config(config_path: Optional[str] = None) -> PhotoLoopConfig:
         web=_dict_to_dataclass(config_data.get('web'), WebConfig),
         local_albums=_dict_to_dataclass(config_data.get('local_albums'), LocalAlbumsConfig),
         rendered_cache=_dict_to_dataclass(config_data.get('rendered_cache'), RenderedCacheConfig),
+        clock=_dict_to_dataclass(config_data.get('clock'), ClockConfig),
+        weather=_dict_to_dataclass(config_data.get('weather'), WeatherConfig),
+        news=_dict_to_dataclass(config_data.get('news'), NewsConfig),
         config_path=found_path,
     )
 
@@ -588,5 +633,30 @@ def validate_config(config: PhotoLoopConfig) -> List[str]:
 
     if not (70 <= config.rendered_cache.quality <= 100):
         errors.append("Rendered cache quality must be between 70 and 100")
+
+    # Check clock settings
+    valid_clock_styles = [
+        'digital_24h', 'digital_12h', 'digital_seconds', 'digital_large',
+        'analog_classic', 'analog_modern', 'minimal_time', 'minimal_date'
+    ]
+    if config.clock.style not in valid_clock_styles:
+        errors.append(f"Clock style must be one of: {valid_clock_styles}")
+
+    if config.clock.size not in ['small', 'medium', 'large']:
+        errors.append("Clock size must be 'small', 'medium', or 'large'")
+
+    # Check weather settings
+    if config.weather.units not in ['fahrenheit', 'celsius']:
+        errors.append("Weather units must be 'fahrenheit' or 'celsius'")
+
+    if config.weather.update_interval_minutes < 5:
+        errors.append("Weather update interval must be at least 5 minutes")
+
+    # Check news settings
+    if config.news.max_headlines < 1:
+        errors.append("News max_headlines must be at least 1")
+
+    if config.news.rotate_interval_seconds < 3:
+        errors.append("News rotate_interval_seconds must be at least 3")
 
     return errors

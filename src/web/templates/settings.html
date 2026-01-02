@@ -258,7 +258,104 @@
                 </select>
             </div>
 
-            <button id="btn-save-schedule" class="btn btn-primary">Save Schedule</button>
+            <!-- Clock Settings (shown when off-hours mode is "clock") -->
+            <div id="clock-settings" style="margin-top: 20px; padding: 15px; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); {% if config.schedule.off_hours_mode != 'clock' %}display: none;{% endif %}">
+                <h3 style="margin-top: 0;">Clock Settings</h3>
+
+                <div class="form-group">
+                    <label for="clock-style">Clock Style</label>
+                    <select id="clock-style">
+                        <option value="digital_24h" {% if config.clock.style == 'digital_24h' %}selected{% endif %}>Digital 24-Hour</option>
+                        <option value="digital_12h" {% if config.clock.style == 'digital_12h' %}selected{% endif %}>Digital 12-Hour</option>
+                        <option value="digital_seconds" {% if config.clock.style == 'digital_seconds' %}selected{% endif %}>Digital with Seconds</option>
+                        <option value="digital_large" {% if config.clock.style == 'digital_large' %}selected{% endif %}>Digital Large</option>
+                        <option value="analog_classic" {% if config.clock.style == 'analog_classic' %}selected{% endif %}>Analog Classic</option>
+                        <option value="analog_modern" {% if config.clock.style == 'analog_modern' %}selected{% endif %}>Analog Modern</option>
+                        <option value="minimal_time" {% if config.clock.style == 'minimal_time' %}selected{% endif %}>Minimal Time</option>
+                        <option value="minimal_date" {% if config.clock.style == 'minimal_date' %}selected{% endif %}>Minimal Date</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="clock-size">Size</label>
+                    <select id="clock-size">
+                        <option value="small" {% if config.clock.size == 'small' %}selected{% endif %}>Small</option>
+                        <option value="medium" {% if config.clock.size == 'medium' %}selected{% endif %}>Medium</option>
+                        <option value="large" {% if config.clock.size == 'large' %}selected{% endif %}>Large</option>
+                    </select>
+                    <p class="help-text" style="margin-top: 4px;">Controls clock, weather, and news text size.</p>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="clock-show-date"
+                               {% if config.clock.show_date %}checked{% endif %}>
+                        Show Date
+                    </label>
+                </div>
+
+                <h4 style="margin-top: 20px; margin-bottom: 10px;">Weather (Optional)</h4>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="weather-enabled"
+                               {% if config.weather.enabled %}checked{% endif %}>
+                        Show Weather
+                    </label>
+                </div>
+
+                <div id="weather-settings" style="margin-left: 20px; {% if not config.weather.enabled %}display: none;{% endif %}">
+                    <div class="form-group">
+                        <label for="weather-city">City Name (for display)</label>
+                        <input type="text" id="weather-city" placeholder="e.g., San Francisco"
+                               value="{{ config.weather.city_name }}">
+                    </div>
+                    <div class="time-range">
+                        <div class="form-group">
+                            <label for="weather-lat">Latitude</label>
+                            <input type="number" id="weather-lat" step="0.0001" placeholder="37.7749"
+                                   value="{{ config.weather.latitude if config.weather.latitude else '' }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="weather-lon">Longitude</label>
+                            <input type="number" id="weather-lon" step="0.0001" placeholder="-122.4194"
+                                   value="{{ config.weather.longitude if config.weather.longitude else '' }}">
+                        </div>
+                    </div>
+                    <p class="help-text" style="margin-top: 4px;">Find coordinates at <a href="https://www.latlong.net/" target="_blank" style="color: var(--sage-primary);">latlong.net</a></p>
+                    <div class="form-group">
+                        <label for="weather-units">Temperature Units</label>
+                        <select id="weather-units">
+                            <option value="fahrenheit" {% if config.weather.units == 'fahrenheit' %}selected{% endif %}>Fahrenheit</option>
+                            <option value="celsius" {% if config.weather.units == 'celsius' %}selected{% endif %}>Celsius</option>
+                        </select>
+                    </div>
+                </div>
+
+                <h4 style="margin-top: 20px; margin-bottom: 10px;">News Headlines (Optional)</h4>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="news-enabled"
+                               {% if config.news.enabled %}checked{% endif %}>
+                        Show News Headlines
+                    </label>
+                </div>
+
+                <div id="news-settings" style="margin-left: 20px; {% if not config.news.enabled %}display: none;{% endif %}">
+                    <div class="form-group">
+                        <label for="news-feeds">RSS Feed URLs (one per line)</label>
+                        <textarea id="news-feeds" rows="3" placeholder="https://feeds.bbci.co.uk/news/rss.xml"
+                                  style="width: 100%; font-family: inherit; font-size: 14px;">{{ config.news.feed_urls | join('\n') }}</textarea>
+                        <p class="help-text" style="margin-top: 4px;">Enter RSS feed URLs, one per line</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="news-rotate">Headline Rotation (seconds)</label>
+                        <input type="number" id="news-rotate" min="3" max="60"
+                               value="{{ config.news.rotate_interval_seconds }}">
+                    </div>
+                </div>
+            </div>
+
+            <button id="btn-save-schedule" class="btn btn-primary" style="margin-top: 20px;">Save</button>
         </section>
 
         <!-- Cache Tab -->
@@ -964,13 +1061,24 @@
         });
 
         // Track schedule settings changes
-        const scheduleInputs = ['weekday-start', 'weekday-end', 'weekend-start', 'weekend-end', 'off-hours-mode'];
+        const scheduleInputs = [
+            'weekday-start', 'weekday-end', 'weekend-start', 'weekend-end', 'off-hours-mode',
+            'clock-style', 'clock-size', 'clock-show-date',
+            'weather-enabled', 'weather-city', 'weather-lat', 'weather-lon', 'weather-units',
+            'news-enabled', 'news-feeds', 'news-rotate'
+        ];
         const scheduleOriginalValues = {};
 
         function captureScheduleOriginalValues() {
             scheduleInputs.forEach(id => {
                 const el = document.getElementById(id);
-                scheduleOriginalValues[id] = el.value;
+                if (el) {
+                    if (el.type === 'checkbox') {
+                        scheduleOriginalValues[id] = el.checked;
+                    } else {
+                        scheduleOriginalValues[id] = el.value;
+                    }
+                }
             });
         }
 
@@ -979,20 +1087,46 @@
             let hasChanges = false;
             scheduleInputs.forEach(id => {
                 const el = document.getElementById(id);
-                if (el.value !== scheduleOriginalValues[id]) {
-                    hasChanges = true;
+                if (el) {
+                    const currentValue = el.type === 'checkbox' ? el.checked : el.value;
+                    if (currentValue !== scheduleOriginalValues[id]) {
+                        hasChanges = true;
+                    }
                 }
             });
             btn.disabled = !hasChanges;
         }
+
+        // Show/hide clock settings based on off-hours mode
+        document.getElementById('off-hours-mode').addEventListener('change', (e) => {
+            const clockSettings = document.getElementById('clock-settings');
+            clockSettings.style.display = e.target.value === 'clock' ? 'block' : 'none';
+            checkScheduleChanges();
+        });
+
+        // Show/hide weather settings based on checkbox
+        document.getElementById('weather-enabled').addEventListener('change', (e) => {
+            document.getElementById('weather-settings').style.display = e.target.checked ? 'block' : 'none';
+            checkScheduleChanges();
+        });
+
+        // Show/hide news settings based on checkbox
+        document.getElementById('news-enabled').addEventListener('change', (e) => {
+            document.getElementById('news-settings').style.display = e.target.checked ? 'block' : 'none';
+            checkScheduleChanges();
+        });
 
         // Initialize schedule tracking
         captureScheduleOriginalValues();
         document.getElementById('btn-save-schedule').disabled = true;
         scheduleInputs.forEach(id => {
             const el = document.getElementById(id);
-            el.addEventListener('change', checkScheduleChanges);
-            el.addEventListener('input', checkScheduleChanges);
+            if (el) {
+                el.addEventListener('change', checkScheduleChanges);
+                if (el.type === 'number' || el.type === 'text' || el.tagName === 'TEXTAREA') {
+                    el.addEventListener('input', checkScheduleChanges);
+                }
+            }
         });
 
         // Save schedule settings
@@ -1002,12 +1136,30 @@
             btn.textContent = 'Saving...';
 
             try {
+                // Parse news feeds from textarea
+                const feedsText = document.getElementById('news-feeds').value;
+                const feedUrls = feedsText.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+
                 const data = {
                     weekday_start: document.getElementById('weekday-start').value,
                     weekday_end: document.getElementById('weekday-end').value,
                     weekend_start: document.getElementById('weekend-start').value,
                     weekend_end: document.getElementById('weekend-end').value,
-                    off_hours_mode: document.getElementById('off-hours-mode').value
+                    off_hours_mode: document.getElementById('off-hours-mode').value,
+                    // Clock settings
+                    clock_style: document.getElementById('clock-style').value,
+                    clock_size: document.getElementById('clock-size').value,
+                    clock_show_date: document.getElementById('clock-show-date').checked,
+                    // Weather settings
+                    weather_enabled: document.getElementById('weather-enabled').checked,
+                    weather_city: document.getElementById('weather-city').value,
+                    weather_latitude: document.getElementById('weather-lat').value || null,
+                    weather_longitude: document.getElementById('weather-lon').value || null,
+                    weather_units: document.getElementById('weather-units').value,
+                    // News settings
+                    news_enabled: document.getElementById('news-enabled').checked,
+                    news_feed_urls: feedUrls,
+                    news_rotate_interval: parseInt(document.getElementById('news-rotate').value)
                 };
 
                 const result = await apiCall('/api/schedule', 'POST', data);
@@ -1015,16 +1167,16 @@
                     captureScheduleOriginalValues();
                     btn.textContent = 'Saved!';
                     setTimeout(() => {
-                        btn.textContent = 'Save Schedule';
+                        btn.textContent = 'Save';
                     }, 1500);
                 } else {
                     alert('Error: ' + (result.error || 'Unknown error'));
-                    btn.textContent = 'Save Schedule';
+                    btn.textContent = 'Save';
                     btn.disabled = false;
                 }
             } catch (e) {
                 alert('Error saving schedule: ' + e);
-                btn.textContent = 'Save Schedule';
+                btn.textContent = 'Save';
                 btn.disabled = false;
             }
         });
