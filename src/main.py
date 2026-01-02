@@ -496,10 +496,10 @@ class PhotoLoop:
                     last_state = current_state
 
                 # Update display mode
-                # Check if any albums are enabled for display
-                has_albums = self.cache_manager.has_enabled_albums()
+                # Check if there's any content to display
+                has_content = self.cache_manager.has_displayable_media()
 
-                if should_show and has_albums:
+                if should_show and has_content:
                     self.display.set_mode(DisplayMode.SLIDESHOW)
 
                     # Check if we need to load a new photo
@@ -581,8 +581,8 @@ class PhotoLoop:
                             logger.info(f"Displaying: {os.path.basename(next_media.local_path)}")
                         elif current_media is None:
                             logger.warning("No media available to display")
-                elif not has_albums:
-                    # No albums enabled - behave like STOP, respecting off_hours_mode
+                elif not has_content:
+                    # No content to display - behave like STOP, respecting off_hours_mode
                     current_media = None
                     if self.config.schedule.off_hours_mode == 'clock':
                         self.display.set_mode(DisplayMode.CLOCK)

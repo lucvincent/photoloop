@@ -1159,6 +1159,13 @@ class CacheManager:
         """Check if any albums are enabled for display."""
         return any(album.enabled for album in self.config.albums)
 
+    def has_displayable_media(self) -> bool:
+        """Check if there's any media available to display."""
+        with self._lock:
+            if not self._playlist:
+                self._rebuild_playlist()
+            return len(self._playlist) > 0
+
     def rebuild_playlist(self) -> None:
         """Public method to rebuild playlist after config changes."""
         self._rebuild_playlist()
