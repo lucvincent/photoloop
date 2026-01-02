@@ -582,9 +582,12 @@ class PhotoLoop:
                         elif current_media is None:
                             logger.warning("No media available to display")
                 elif not has_albums:
-                    # No albums enabled - stop slideshow (show black screen)
+                    # No albums enabled - behave like STOP, respecting off_hours_mode
                     current_media = None
-                    self.display.set_mode(DisplayMode.BLACK)
+                    if self.config.schedule.off_hours_mode == 'clock':
+                        self.display.set_mode(DisplayMode.CLOCK)
+                    else:
+                        self.display.set_mode(DisplayMode.BLACK)
                 else:
                     # Off-hours mode
                     current_media = None  # Reset so we load fresh when resuming

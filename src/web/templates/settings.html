@@ -60,6 +60,7 @@
                     <button id="btn-start" class="btn btn-success">Start</button>
                     <button id="btn-stop" class="btn btn-danger">Stop</button>
                 </div>
+                <span id="no-albums-msg" class="help-text" style="display: none; color: var(--warning);">Enable at least one album in the Albums tab to start.</span>
                 <label class="checkbox-inline">
                     <input type="checkbox" id="schedule-enabled-control"
                            {% if config.schedule.enabled %}checked{% endif %}>
@@ -340,9 +341,14 @@
                     const stateEl = document.getElementById('state');
                     const state = status.schedule.state;
                     const isPaused = status.photo_control && status.photo_control.paused;
+                    const hasAlbumsForStatus = status.has_enabled_albums !== false;
                     let displayText, badgeClass;
 
-                    if (state === 'active' || state === 'force_on') {
+                    if ((state === 'active' || state === 'force_on') && !hasAlbumsForStatus) {
+                        // Schedule wants to run but no albums enabled
+                        displayText = 'No Albums';
+                        badgeClass = 'status-badge stopped';
+                    } else if (state === 'active' || state === 'force_on') {
                         if (isPaused) {
                             displayText = 'Paused';
                             badgeClass = 'status-badge paused';
@@ -396,13 +402,31 @@
                 // Update button states based on current state
                 if (status.schedule) {
                     const state = status.schedule.state;
-                    const isRunning = (state === 'active' || state === 'force_on');
+                    const scheduleRunning = (state === 'active' || state === 'force_on');
+                    const hasAlbums = status.has_enabled_albums !== false;  // Default true if not present
+                    // Effectively running only if schedule says so AND we have albums
+                    const isRunning = scheduleRunning && hasAlbums;
 
-                    // Show Start when stopped/off-hours, Show Stop when running
+                    // Show Start when stopped/off-hours/no-albums, Show Stop when running
                     const startBtn = document.getElementById('btn-start');
                     const stopBtn = document.getElementById('btn-stop');
+                    const noAlbumsMsg = document.getElementById('no-albums-msg');
+
                     startBtn.style.display = isRunning ? 'none' : '';
                     stopBtn.style.display = isRunning ? '' : 'none';
+
+                    // Disable Start and show message when no albums enabled
+                    if (!hasAlbums) {
+                        startBtn.disabled = true;
+                        startBtn.style.opacity = '0.5';
+                        startBtn.style.cursor = 'not-allowed';
+                        noAlbumsMsg.style.display = '';
+                    } else {
+                        startBtn.disabled = false;
+                        startBtn.style.opacity = '';
+                        startBtn.style.cursor = '';
+                        noAlbumsMsg.style.display = 'none';
+                    }
                 }
 
                 // Sync schedule enabled checkbox

@@ -94,6 +94,8 @@ def create_app(
                 "size_mb": size_breakdown["total"],  # Total for backwards compat
                 "size_breakdown": size_breakdown  # Detailed breakdown
             }
+            # Add album state for UI
+            status["has_enabled_albums"] = app.cache_manager.has_enabled_albums()
 
         # Add schedule info
         if app.scheduler:

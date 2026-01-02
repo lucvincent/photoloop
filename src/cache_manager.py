@@ -762,6 +762,7 @@ class CacheManager:
                             stats["unchanged"] += 1
                 else:
                     # New item - download or index it
+                    # Release lock during download/indexing to allow main loop to run
                     if source_type == "local":
                         # Local file - use original path, no download
                         local_path = _extract_local_path(item.url)
@@ -773,17 +774,22 @@ class CacheManager:
                         file_mtime = _get_file_mtime(local_path)
                         logger.info(f"Indexing local file: {os.path.basename(local_path)}")
                     else:
-                        # Google Photos - download it
-                        local_path = self._download_media(item.url, item.media_type, media_id)
+                        # Google Photos - download it (release lock during I/O)
+                        self._lock.release()
+                        try:
+                            local_path = self._download_media(item.url, item.media_type, media_id)
+                        finally:
+                            self._lock.acquire()
                         file_mtime = None
 
                     if local_path:
-                        # Extract metadata
+                        # Extract metadata (release lock during I/O)
                         exif_date = None
                         embedded_caption = None
                         gps_latitude = None
                         gps_longitude = None
                         if item.media_type == "photo":
+                            self._lock.release()
                             try:
                                 metadata = self._metadata_extractor.extract(local_path)
                                 if metadata.date_taken:
@@ -795,6 +801,8 @@ class CacheManager:
                                 gps_longitude = metadata.gps_longitude
                             except Exception as e:
                                 logger.debug(f"Failed to extract metadata: {e}")
+                            finally:
+                                self._lock.acquire()
 
                         # Create cache entry
                         cached = CachedMedia(

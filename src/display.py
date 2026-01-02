@@ -168,6 +168,7 @@ class Display:
 
         # Track display power state
         self._display_powered = True
+        self._dpms_wake_pending = False  # Track if renderer recreation needed after DPMS wake
 
         # Photo control state
         self._paused = False
@@ -437,6 +438,7 @@ class Display:
             # Force recreate renderer after DPMS wake - GPU state can be corrupted
             # even when dimensions appear unchanged
             self._refresh_display_dimensions(force_recreate=True)
+            self._dpms_wake_pending = False
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
@@ -564,6 +566,7 @@ class Display:
             time.sleep(0.5)
             # Force recreate renderer after DPMS wake - GPU state can be corrupted
             self._refresh_display_dimensions(force_recreate=True)
+            self._dpms_wake_pending = False
 
         self.mode = DisplayMode.SLIDESHOW
         self._current_media = media
@@ -1416,6 +1419,11 @@ class Display:
         Args:
             on: True to turn display on, False to turn off.
         """
+        # Mark that renderer recreation is needed when waking from DPMS
+        if on and not self._display_powered:
+            self._dpms_wake_pending = True
+            logger.debug("DPMS wake pending - will recreate renderer")
+
         self._display_powered = on
 
         power_method = self.config.display.power_control.lower()
@@ -1480,6 +1488,10 @@ class Display:
         # Turn display back on if it was off
         if not self._display_powered:
             self._set_display_power(True)
+            time.sleep(0.5)
+            # Force recreate renderer after DPMS wake - GPU state can be corrupted
+            self._refresh_display_dimensions(force_recreate=True)
+            self._dpms_wake_pending = False
 
         if self.mode != DisplayMode.CLOCK:
             self._needs_redraw = True
@@ -1497,7 +1509,13 @@ class Display:
                 self._needs_redraw = True
                 # Verify display dimensions when coming back to slideshow
                 # (display manager may have altered window during off-hours)
-                self._refresh_display_dimensions()
+                # Force renderer recreation if waking from DPMS to fix GPU state corruption
+                force_recreate = self._dpms_wake_pending
+                if force_recreate:
+                    logger.info("Forcing renderer recreation after DPMS wake")
+                    time.sleep(0.5)  # Wait for display to stabilize
+                self._refresh_display_dimensions(force_recreate=force_recreate)
+                self._dpms_wake_pending = False
             self.mode = DisplayMode.SLIDESHOW
 
     def is_transition_complete(self) -> bool:
