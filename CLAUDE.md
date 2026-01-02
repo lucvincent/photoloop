@@ -576,3 +576,12 @@ python -c "from src.album_scraper import AlbumScraper; s = AlbumScraper(); print
 # Test face detection on an image
 python -c "from src.face_detector import FaceDetector; fd = FaceDetector(); print(fd.detect('/path/to/photo.jpg'))"
 ```
+
+## TODOs
+
+### Display Power Control
+- Fix desktop flash during DPMS wake (see TODO in `display.py:_wake_display_if_needed()`)
+
+### Web UI
+- Replace Previous/Next button icons (⏮/⏭) with custom SVG single-arrow-with-bar icons
+  for a cleaner look. Unicode doesn't have polished single-arrow versions.

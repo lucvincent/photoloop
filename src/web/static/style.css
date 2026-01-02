@@ -359,6 +359,8 @@ input[type="checkbox"] {
 
 .photo-control-btn .btn-icon {
     font-size: 1.2em;
+    line-height: 1;
+    transform: translateY(-1px);
 }
 
 .photo-control-btn .btn-text {
@@ -375,6 +377,7 @@ input[type="checkbox"] {
     }
     .photo-control-btn .btn-icon {
         font-size: 1.4em;
+        transform: none;
     }
 }
 
