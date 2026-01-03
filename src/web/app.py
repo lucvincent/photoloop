@@ -536,7 +536,7 @@ def create_app(
                 # Build schedule updates
                 schedule_updates = {}
 
-                # Update weekday schedule
+                # Update weekday schedule (legacy format)
                 if 'weekday_start' in data or 'weekday_end' in data:
                     schedule_updates['weekday'] = {}
                     if 'weekday_start' in data:
@@ -544,7 +544,7 @@ def create_app(
                     if 'weekday_end' in data:
                         schedule_updates['weekday']['end_time'] = data['weekday_end']
 
-                # Update weekend schedule
+                # Update weekend schedule (legacy format)
                 if 'weekend_start' in data or 'weekend_end' in data:
                     schedule_updates['weekend'] = {}
                     if 'weekend_start' in data:
@@ -552,9 +552,23 @@ def create_app(
                     if 'weekend_end' in data:
                         schedule_updates['weekend']['end_time'] = data['weekend_end']
 
-                # Update off-hours mode
+                # Update off-hours mode (legacy)
                 if 'off_hours_mode' in data:
                     schedule_updates['off_hours_mode'] = data['off_hours_mode']
+
+                # Update default screensaver mode
+                if 'default_screensaver_mode' in data:
+                    schedule_updates['default_screensaver_mode'] = data['default_screensaver_mode']
+
+                # Update event-based schedule
+                if 'weekday_events' in data:
+                    schedule_updates['weekday_events'] = data['weekday_events']
+                if 'weekend_events' in data:
+                    schedule_updates['weekend_events'] = data['weekend_events']
+
+                # Update holidays
+                if 'holidays' in data:
+                    schedule_updates['holidays'] = data['holidays']
 
                 if schedule_updates:
                     updates['schedule'] = schedule_updates
@@ -619,6 +633,148 @@ def create_app(
         except Exception as e:
             logger.error(f"Error saving schedule: {e}")
             return jsonify({"error": str(e)}), 500
+
+    @app.route('/api/schedule/events', methods=['GET'])
+    def api_get_schedule_events():
+        """Get event-based schedule configuration."""
+        schedule = app.photoloop_config.schedule
+
+        # Get events (migrated from legacy if needed)
+        weekday_events = schedule.get_events_for_day_type(is_weekend=False)
+        weekend_events = schedule.get_events_for_day_type(is_weekend=True)
+
+        return jsonify({
+            "enabled": schedule.enabled,
+            "default_screensaver_mode": schedule.default_screensaver_mode,
+            "weekday_events": [
+                {"start_time": e.start_time, "end_time": e.end_time, "mode": e.mode}
+                for e in weekday_events
+            ],
+            "weekend_events": [
+                {"start_time": e.start_time, "end_time": e.end_time, "mode": e.mode}
+                for e in weekend_events
+            ],
+            "holidays": {
+                "use_weekend_schedule": schedule.holidays.use_weekend_schedule,
+                "countries": schedule.holidays.countries
+            },
+            # Include legacy fields for backward compatibility
+            "off_hours_mode": schedule.off_hours_mode,
+            "weekday": {
+                "start_time": schedule.weekday.start_time,
+                "end_time": schedule.weekday.end_time
+            },
+            "weekend": {
+                "start_time": schedule.weekend.start_time,
+                "end_time": schedule.weekend.end_time
+            }
+        })
+
+    @app.route('/api/schedule/events', methods=['POST'])
+    def api_save_schedule_events():
+        """Save event-based schedule configuration."""
+        try:
+            data = request.get_json()
+            if data is None:
+                return jsonify({"error": "No data provided"}), 400
+
+            config_path = app.photoloop_config.config_path
+            if not config_path:
+                return jsonify({"error": "No config path"}), 500
+
+            schedule_updates = {}
+
+            # Default screensaver mode
+            if 'default_screensaver_mode' in data:
+                mode = data['default_screensaver_mode']
+                if mode not in ['black', 'clock']:
+                    return jsonify({"error": "default_screensaver_mode must be 'black' or 'clock'"}), 400
+                schedule_updates['default_screensaver_mode'] = mode
+
+            # Weekday events
+            if 'weekday_events' in data:
+                events = data['weekday_events']
+                if not _validate_events(events):
+                    return jsonify({"error": "Invalid weekday_events format"}), 400
+                schedule_updates['weekday_events'] = events
+
+            # Weekend events
+            if 'weekend_events' in data:
+                events = data['weekend_events']
+                if not _validate_events(events):
+                    return jsonify({"error": "Invalid weekend_events format"}), 400
+                schedule_updates['weekend_events'] = events
+
+            # Holidays
+            if 'holidays' in data:
+                holidays = data['holidays']
+                if not isinstance(holidays, dict):
+                    return jsonify({"error": "Invalid holidays format"}), 400
+                schedule_updates['holidays'] = {
+                    "use_weekend_schedule": bool(holidays.get('use_weekend_schedule', False)),
+                    "countries": holidays.get('countries', [])
+                }
+
+            if schedule_updates:
+                save_config_partial(config_path, {'schedule': schedule_updates})
+
+            # Reload config and notify
+            if app.on_config_change:
+                app.on_config_change()
+
+            return jsonify({"success": True})
+
+        except Exception as e:
+            logger.error(f"Error saving schedule events: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    def _validate_events(events: list) -> bool:
+        """Validate event list format."""
+        if not isinstance(events, list):
+            return False
+        valid_modes = ['slideshow', 'clock', 'black']
+        for event in events:
+            if not isinstance(event, dict):
+                return False
+            if 'start_time' not in event or 'end_time' not in event or 'mode' not in event:
+                return False
+            if event['mode'] not in valid_modes:
+                return False
+        return True
+
+    @app.route('/api/holidays/countries', methods=['GET'])
+    def api_get_holiday_countries():
+        """Get available holiday country codes with display names."""
+        # Common countries that the holidays library supports
+        # This is a curated list of commonly used countries
+        countries = [
+            {"code": "US", "name": "United States"},
+            {"code": "GB", "name": "United Kingdom"},
+            {"code": "CA", "name": "Canada"},
+            {"code": "AU", "name": "Australia"},
+            {"code": "DE", "name": "Germany"},
+            {"code": "FR", "name": "France"},
+            {"code": "ES", "name": "Spain"},
+            {"code": "IT", "name": "Italy"},
+            {"code": "NL", "name": "Netherlands"},
+            {"code": "BE", "name": "Belgium"},
+            {"code": "CH", "name": "Switzerland"},
+            {"code": "AT", "name": "Austria"},
+            {"code": "IL", "name": "Israel"},
+            {"code": "JP", "name": "Japan"},
+            {"code": "CN", "name": "China"},
+            {"code": "IN", "name": "India"},
+            {"code": "BR", "name": "Brazil"},
+            {"code": "MX", "name": "Mexico"},
+        ]
+
+        # Get currently selected countries from config
+        selected = app.photoloop_config.schedule.holidays.countries
+
+        return jsonify({
+            "countries": countries,
+            "selected": selected
+        })
 
     @app.route('/api/display', methods=['POST'])
     def api_save_display():

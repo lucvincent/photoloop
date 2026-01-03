@@ -14,9 +14,11 @@ import logging
 # ruamel.yaml preserves comments when loading/saving
 try:
     from ruamel.yaml import YAML
+    from ruamel.yaml.scalarstring import SingleQuotedScalarString
     RUAMEL_AVAILABLE = True
 except ImportError:
     RUAMEL_AVAILABLE = False
+    SingleQuotedScalarString = str  # Fallback to regular string
 
 logger = logging.getLogger(__name__)
 
@@ -149,21 +151,109 @@ class OverlayConfig:
 
 @dataclass
 class ScheduleTimeConfig:
-    """Schedule time for a period."""
+    """Schedule time for a period (legacy format, for backward compatibility)."""
     start_time: str = "07:00"
     end_time: str = "22:00"
 
 
 @dataclass
+class ScheduleEvent:
+    """A single scheduled event with start time, end time, and display mode.
+
+    Events define what the display shows during a time period:
+    - slideshow: Show photo slideshow
+    - clock: Show clock display (with optional weather/news)
+    - black: Turn off display (DPMS standby)
+    """
+    start_time: str = "00:00"  # HH:MM format
+    end_time: str = "24:00"    # HH:MM format (use "24:00" for midnight end)
+    mode: str = "black"        # "slideshow", "clock", "black"
+
+
+@dataclass
+class HolidayConfig:
+    """Holiday-aware scheduling settings.
+
+    When enabled, holidays use the weekend schedule instead of weekday schedule.
+    Multiple countries can be selected to include holidays from each.
+    """
+    use_weekend_schedule: bool = False
+    # ISO 3166-1 alpha-2 country codes (e.g., "US", "FR", "DE", "IL", "GB", "CA")
+    countries: List[str] = field(default_factory=list)
+
+
+@dataclass
 class ScheduleConfig:
-    """Schedule settings."""
+    """Schedule settings with event-based scheduling.
+
+    Supports two formats:
+    1. Legacy format: Single start_time/end_time per day type (weekday/weekend)
+       with off_hours_mode determining what happens outside those hours.
+
+    2. Event-based format: Multiple events per day, each with its own mode.
+       More flexible, allows different modes at different times of day.
+
+    The event-based format is used if weekday_events or weekend_events are present.
+    Otherwise, the legacy format is automatically migrated to events on first save.
+    """
     enabled: bool = True
-    off_hours_mode: str = "black"  # black, clock
+
+    # Default mode when user manually clicks "Stop" (black or clock)
+    # This is what shows until the next scheduled event starts
+    default_screensaver_mode: str = "black"
+
+    # Legacy format fields (for backward compatibility)
+    off_hours_mode: str = "black"  # black, clock - used during migration
     weekday: ScheduleTimeConfig = field(default_factory=ScheduleTimeConfig)
     weekend: ScheduleTimeConfig = field(default_factory=lambda: ScheduleTimeConfig(
         start_time="08:00", end_time="23:00"
     ))
     overrides: Dict[str, ScheduleTimeConfig] = field(default_factory=dict)
+
+    # Event-based format fields
+    weekday_events: List[ScheduleEvent] = field(default_factory=list)
+    weekend_events: List[ScheduleEvent] = field(default_factory=list)
+    holidays: HolidayConfig = field(default_factory=HolidayConfig)
+
+    def get_events_for_day_type(self, is_weekend: bool) -> List[ScheduleEvent]:
+        """Get events for weekday or weekend, migrating from legacy format if needed."""
+        events = self.weekend_events if is_weekend else self.weekday_events
+
+        if events:
+            return events
+
+        # Migrate from legacy format
+        legacy = self.weekend if is_weekend else self.weekday
+        return self._migrate_legacy_to_events(legacy)
+
+    def _migrate_legacy_to_events(self, legacy: ScheduleTimeConfig) -> List[ScheduleEvent]:
+        """Convert legacy start_time/end_time to event list."""
+        events = []
+
+        # Before slideshow hours: use off_hours_mode
+        if legacy.start_time != "00:00":
+            events.append(ScheduleEvent(
+                start_time="00:00",
+                end_time=legacy.start_time,
+                mode=self.off_hours_mode
+            ))
+
+        # Slideshow hours
+        events.append(ScheduleEvent(
+            start_time=legacy.start_time,
+            end_time=legacy.end_time,
+            mode="slideshow"
+        ))
+
+        # After slideshow hours: use off_hours_mode
+        if legacy.end_time != "24:00" and legacy.end_time != "00:00":
+            events.append(ScheduleEvent(
+                start_time=legacy.end_time,
+                end_time="24:00",
+                mode=self.off_hours_mode
+            ))
+
+        return events
 
 
 @dataclass
@@ -299,6 +389,15 @@ def _dict_to_dataclass(data: Dict[str, Any], cls: type) -> Any:
                 k: _dict_to_dataclass(v, ScheduleTimeConfig)
                 for k, v in value.items()
             }
+        # Handle List[ScheduleEvent] for weekday_events and weekend_events
+        elif key in ('weekday_events', 'weekend_events') and isinstance(value, list):
+            kwargs[key] = [
+                _dict_to_dataclass(v, ScheduleEvent) if isinstance(v, dict) else v
+                for v in value
+            ]
+        # Handle HolidayConfig
+        elif key == 'holidays' and isinstance(value, dict):
+            kwargs[key] = _dict_to_dataclass(value, HolidayConfig)
         else:
             kwargs[key] = value
 
@@ -465,6 +564,31 @@ def _update_recursive(target: Dict, source: Dict) -> Dict:
     return target
 
 
+def _quote_time_strings(data: Any) -> Any:
+    """
+    Recursively process data to quote time strings (HH:MM format).
+
+    YAML interprets unquoted HH:MM as sexagesimal numbers (e.g., 08:00 becomes 480).
+    This wraps time strings in SingleQuotedScalarString to ensure they're quoted.
+    """
+    import re
+    time_pattern = re.compile(r'^([0-2]?[0-9]):([0-5][0-9])$')
+
+    if isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            if key in ('start_time', 'end_time') and isinstance(value, str):
+                # Quote time values
+                result[key] = SingleQuotedScalarString(value)
+            else:
+                result[key] = _quote_time_strings(value)
+        return result
+    elif isinstance(data, list):
+        return [_quote_time_strings(item) for item in data]
+    else:
+        return data
+
+
 def save_config_partial(config_path: str, updates: Dict[str, Any]) -> None:
     """
     Update specific keys in config file while preserving comments.
@@ -483,6 +607,9 @@ def save_config_partial(config_path: str, updates: Dict[str, Any]) -> None:
         })
     """
     config_path = os.path.expanduser(config_path)
+
+    # Quote time strings to prevent YAML sexagesimal interpretation
+    updates = _quote_time_strings(updates)
 
     if RUAMEL_AVAILABLE and os.path.exists(config_path):
         ruamel = YAML()
@@ -544,6 +671,22 @@ def config_to_dict(config: PhotoLoopConfig) -> Dict[str, Any]:
             return obj
 
     return dataclass_to_dict(config)
+
+
+def _is_valid_time(time_str: str) -> bool:
+    """Check if time string is valid HH:MM format."""
+    if not isinstance(time_str, str):
+        return False
+    if time_str == "24:00":  # Special case for end of day
+        return True
+    try:
+        parts = time_str.split(':')
+        if len(parts) != 2:
+            return False
+        hour, minute = int(parts[0]), int(parts[1])
+        return 0 <= hour <= 23 and 0 <= minute <= 59
+    except (ValueError, AttributeError):
+        return False
 
 
 def validate_config(config: PhotoLoopConfig) -> List[str]:
@@ -624,6 +767,27 @@ def validate_config(config: PhotoLoopConfig) -> List[str]:
     # Check schedule settings
     if config.schedule.off_hours_mode not in ['black', 'clock']:
         errors.append("Off hours mode must be 'black' or 'clock'")
+
+    if config.schedule.default_screensaver_mode not in ['black', 'clock']:
+        errors.append("Default screensaver mode must be 'black' or 'clock'")
+
+    # Validate schedule events
+    valid_event_modes = ['slideshow', 'clock', 'black']
+    for event_list, name in [(config.schedule.weekday_events, 'weekday'),
+                              (config.schedule.weekend_events, 'weekend')]:
+        for i, event in enumerate(event_list):
+            if event.mode not in valid_event_modes:
+                errors.append(f"{name} event {i+1}: mode must be one of {valid_event_modes}")
+            # Validate time format (basic check)
+            for time_field in [event.start_time, event.end_time]:
+                if not _is_valid_time(time_field):
+                    errors.append(f"{name} event {i+1}: invalid time format '{time_field}' (use HH:MM)")
+
+    # Validate holiday country codes
+    valid_countries = ['US', 'FR', 'DE', 'IL', 'GB', 'CA', 'AU', 'ES', 'IT', 'NL', 'BE', 'CH', 'AT', 'JP', 'CN', 'IN', 'BR', 'MX']
+    for country in config.schedule.holidays.countries:
+        if country not in valid_countries:
+            errors.append(f"Unknown holiday country code: {country}. Valid codes: {', '.join(valid_countries)}")
 
     # Check cache settings
     if config.cache.max_size_mb < 100:

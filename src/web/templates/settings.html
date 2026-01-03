@@ -38,7 +38,7 @@
             <button class="tab active" data-tab="control">Control</button>
             <button class="tab" data-tab="albums">Albums</button>
             <button class="tab" data-tab="display">Display</button>
-            <button class="tab" data-tab="schedule">Schedule</button>
+            <button class="tab" data-tab="schedule">Screensaver</button>
             <button class="tab" data-tab="clock">Clock</button>
             <button class="tab" data-tab="cache">Cache</button>
         </nav>
@@ -209,55 +209,74 @@
                        value="{{ config.overlay.font_size }}" style="width: 100px;">
             </div>
 
-            <button id="btn-save-display" class="btn btn-primary">Save Display Settings</button>
+            <button id="btn-save-display" class="btn btn-primary" style="margin-top: 20px;">Save Display Settings</button>
         </section>
 
-        <!-- Schedule Tab -->
+        <!-- Schedule Tab (Screen Saver) -->
         <section id="schedule" class="tab-content">
-            <h2>Schedule Settings</h2>
-            <p class="hint">Changes take effect immediately after saving.</p>
+            <h2>Screen Saver Settings</h2>
 
-            <label class="checkbox-inline" style="margin-bottom: 20px; display: block;">
-                <input type="checkbox" id="schedule-enabled-control"
-                       {% if config.schedule.enabled %}checked{% endif %}>
-                Schedule Enabled
-            </label>
-
-            <h3>Weekday Schedule (Mon-Fri)</h3>
-            <div class="time-range">
-                <div class="form-group">
-                    <label for="weekday-start">Start Time</label>
-                    <input type="time" id="weekday-start"
-                           value="{{ config.schedule.weekday.start_time }}">
-                </div>
-                <div class="form-group">
-                    <label for="weekday-end">End Time</label>
-                    <input type="time" id="weekday-end"
-                           value="{{ config.schedule.weekday.end_time }}">
-                </div>
-            </div>
-
-            <h3>Weekend Schedule (Sat-Sun)</h3>
-            <div class="time-range">
-                <div class="form-group">
-                    <label for="weekend-start">Start Time</label>
-                    <input type="time" id="weekend-start"
-                           value="{{ config.schedule.weekend.start_time }}">
-                </div>
-                <div class="form-group">
-                    <label for="weekend-end">End Time</label>
-                    <input type="time" id="weekend-end"
-                           value="{{ config.schedule.weekend.end_time }}">
-                </div>
-            </div>
-
+            <h3>Default Mode</h3>
             <div class="form-group">
-                <label for="off-hours-mode">Off-Hours Display</label>
-                <select id="off-hours-mode">
-                    <option value="black" {% if config.schedule.off_hours_mode == 'black' %}selected{% endif %}>Black Screen</option>
-                    <option value="clock" {% if config.schedule.off_hours_mode == 'clock' %}selected{% endif %}>Clock</option>
+                <label for="default-screensaver-mode">When slideshow is stopped or has no photos:</label>
+                <select id="default-screensaver-mode">
+                    <option value="black">Black Screen (Display Off)</option>
+                    <option value="clock">Clock</option>
                 </select>
                 <p class="help-text" style="margin-top: 4px;">Configure clock appearance in the Clock tab.</p>
+            </div>
+
+            <h3 style="margin-top: 25px;">Schedule</h3>
+            <div class="form-group">
+                <label class="checkbox-inline">
+                    <input type="checkbox" id="schedule-enabled-control">
+                    Enable Schedule
+                </label>
+                <p class="help-text" style="margin-top: 4px;">Automatically switch between slideshow, clock, and off at scheduled times. When disabled, use Start/Stop buttons manually.</p>
+            </div>
+
+            <div id="schedule-details">
+                <h4 style="margin-bottom: 10px;">Weekday Schedule (Mon-Fri)</h4>
+                <div id="weekday-events" class="event-list">
+                    <!-- Events loaded dynamically -->
+                </div>
+                <button type="button" class="btn btn-small btn-add-event" onclick="addEvent('weekday-events')">+ Add Time Period</button>
+
+                <h4 style="margin-top: 20px; margin-bottom: 10px;">Weekend Schedule (Sat-Sun)</h4>
+                <div id="weekend-events" class="event-list">
+                    <!-- Events loaded dynamically -->
+                </div>
+                <button type="button" class="btn btn-small btn-add-event" onclick="addEvent('weekend-events')">+ Add Time Period</button>
+
+                <h4 style="margin-top: 20px; margin-bottom: 10px;">Holiday Schedule</h4>
+                <div class="form-group">
+                    <label class="checkbox-inline">
+                        <input type="checkbox" id="holidays-use-weekend">
+                        Use weekend schedule on holidays
+                    </label>
+                    <p class="help-text" style="margin-top: 4px;">When enabled, public holidays follow the weekend schedule instead of weekday.</p>
+                </div>
+                <div id="holiday-countries" style="margin-left: 20px; display: none;">
+                    <label style="margin-bottom: 8px; display: block;">Select holiday calendars:</label>
+                    <div class="holiday-checkboxes" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px;">
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="US"> United States</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="GB"> United Kingdom</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="CA"> Canada</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="AU"> Australia</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="DE"> Germany</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="FR"> France</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="ES"> Spain</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="IT"> Italy</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="NL"> Netherlands</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="BE"> Belgium</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="CH"> Switzerland</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="AT"> Austria</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="IL"> Israel</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="JP"> Japan</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="MX"> Mexico</label>
+                        <label class="checkbox-inline"><input type="checkbox" class="holiday-country" value="BR"> Brazil</label>
+                    </div>
+                </div>
             </div>
 
             <button id="btn-save-schedule" class="btn btn-primary" style="margin-top: 20px;">Save</button>
@@ -397,14 +416,14 @@
                 </div>
             </div>
 
-            <button id="btn-save-clock" class="btn btn-primary" style="margin-top: 20px;">Save</button>
+            <button id="btn-save-clock" class="btn btn-primary" style="margin-top: 20px;">Save Clock Settings</button>
         </section>
 
         <!-- Cache Tab -->
         <section id="cache" class="tab-content">
             <h2>Cache Management</h2>
 
-            <div class="status-box">
+            <div class="status-box" style="margin-top: 15px;">
                 <p><strong>Cache Directory:</strong> {{ config.cache.directory }}</p>
                 <p><strong>Max Size:</strong> {{ config.cache.max_size_mb }} MB</p>
                 <p><strong>Current Size:</strong> <span id="cache-size-detail">-</span></p>
@@ -1102,74 +1121,361 @@
             }
         });
 
-        // Track schedule settings changes (schedule times only)
-        const scheduleInputs = [
-            'weekday-start', 'weekday-end', 'weekend-start', 'weekend-end', 'off-hours-mode'
-        ];
-        const scheduleOriginalValues = {};
+        // ========== Schedule (Screen Saver) Tab ==========
 
-        function captureScheduleOriginalValues() {
-            scheduleInputs.forEach(id => {
-                const el = document.getElementById(id);
-                if (el) {
-                    if (el.type === 'checkbox') {
-                        scheduleOriginalValues[id] = el.checked;
-                    } else {
-                        scheduleOriginalValues[id] = el.value;
+        // Store original state for change detection
+        let scheduleOriginalState = null;
+
+        // Format time for display (e.g., "00:00" -> "12:00 AM", "14:30" -> "2:30 PM")
+        function formatTimeDisplay(time24) {
+            if (time24 === '24:00' || time24 === '00:00') return '12:00 AM';
+            const [h, m] = time24.split(':').map(Number);
+            const suffix = h >= 12 ? 'PM' : 'AM';
+            const h12 = h % 12 || 12;
+            return `${h12}:${m.toString().padStart(2, '0')} ${suffix}`;
+        }
+
+        // Create an event row element
+        function createEventRow(event, containerId) {
+            const row = document.createElement('div');
+            row.className = 'event-row';
+            row.dataset.containerId = containerId;
+
+            // Start time - input (may be replaced with fixed span later)
+            const startInput = document.createElement('input');
+            startInput.type = 'time';
+            startInput.className = 'event-start';
+            startInput.value = event.start_time;
+            startInput.addEventListener('change', checkScheduleChanges);
+
+            const separator = document.createElement('span');
+            separator.className = 'event-separator';
+            separator.textContent = 'to';
+
+            // End time - input (may be replaced with fixed span later)
+            const endInput = document.createElement('input');
+            endInput.type = 'time';
+            endInput.className = 'event-end';
+            endInput.value = event.end_time === '24:00' ? '23:59' : event.end_time;
+            endInput.addEventListener('change', checkScheduleChanges);
+
+            const modeSelect = document.createElement('select');
+            modeSelect.className = 'event-mode';
+            ['slideshow', 'clock', 'black'].forEach(mode => {
+                const option = document.createElement('option');
+                option.value = mode;
+                option.textContent = mode === 'black' ? 'Black Screen' : mode.charAt(0).toUpperCase() + mode.slice(1);
+                if (mode === event.mode) option.selected = true;
+                modeSelect.appendChild(option);
+            });
+            modeSelect.addEventListener('change', checkScheduleChanges);
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'btn-delete-event';
+            deleteBtn.innerHTML = '&times;';
+            deleteBtn.title = 'Delete';
+            deleteBtn.addEventListener('click', () => {
+                const container = row.parentElement;
+                row.remove();
+                updateFixedTimes(container.id);
+                checkScheduleChanges();
+            });
+
+            row.appendChild(startInput);
+            row.appendChild(separator);
+            row.appendChild(endInput);
+            row.appendChild(modeSelect);
+            row.appendChild(deleteBtn);
+
+            return row;
+        }
+
+        // Update fixed times: first row start = 00:00, last row end = 24:00
+        function updateFixedTimes(containerId) {
+            const container = document.getElementById(containerId);
+            const rows = container.querySelectorAll('.event-row');
+
+            rows.forEach((row, index) => {
+                const isFirst = index === 0;
+                const isLast = index === rows.length - 1;
+
+                // Handle start time
+                const startEl = row.querySelector('.event-start');
+                const existingStartFixed = row.querySelector('.event-start-fixed');
+
+                if (isFirst) {
+                    // First row: fixed start at 00:00
+                    if (startEl) {
+                        const fixed = document.createElement('span');
+                        fixed.className = 'event-start-fixed event-time-fixed';
+                        fixed.textContent = '12:00 AM';
+                        fixed.dataset.value = '00:00';
+                        startEl.replaceWith(fixed);
+                    }
+                } else {
+                    // Not first row: ensure it's an input
+                    if (existingStartFixed) {
+                        const input = document.createElement('input');
+                        input.type = 'time';
+                        input.className = 'event-start';
+                        input.value = existingStartFixed.dataset.value || '00:00';
+                        input.addEventListener('change', checkScheduleChanges);
+                        existingStartFixed.replaceWith(input);
+                    }
+                }
+
+                // Handle end time
+                const endEl = row.querySelector('.event-end');
+                const existingEndFixed = row.querySelector('.event-end-fixed');
+
+                if (isLast) {
+                    // Last row: fixed end at 24:00 (midnight)
+                    if (endEl) {
+                        const fixed = document.createElement('span');
+                        fixed.className = 'event-end-fixed event-time-fixed';
+                        fixed.textContent = '12:00 AM';
+                        fixed.dataset.value = '24:00';
+                        endEl.replaceWith(fixed);
+                    }
+                } else {
+                    // Not last row: ensure it's an input
+                    if (existingEndFixed) {
+                        const input = document.createElement('input');
+                        input.type = 'time';
+                        input.className = 'event-end';
+                        input.value = '23:59';
+                        input.addEventListener('change', checkScheduleChanges);
+                        existingEndFixed.replaceWith(input);
                     }
                 }
             });
         }
 
-        function checkScheduleChanges() {
-            const btn = document.getElementById('btn-save-schedule');
-            let hasChanges = false;
-            scheduleInputs.forEach(id => {
-                const el = document.getElementById(id);
-                if (el) {
-                    const currentValue = el.type === 'checkbox' ? el.checked : el.value;
-                    if (currentValue !== scheduleOriginalValues[id]) {
-                        hasChanges = true;
+        // Render events in a container
+        function renderEventList(containerId, events) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            events.forEach(event => {
+                container.appendChild(createEventRow(event, containerId));
+            });
+            updateFixedTimes(containerId);
+        }
+
+        // Add a new event to a container
+        function addEvent(containerId) {
+            const container = document.getElementById(containerId);
+            const rows = container.querySelectorAll('.event-row');
+            let startTime = '00:00';
+            if (rows.length > 0) {
+                const lastRow = rows[rows.length - 1];
+                // Get end time from either input or fixed span
+                const endInput = lastRow.querySelector('.event-end');
+                const endFixed = lastRow.querySelector('.event-end-fixed');
+                if (endInput) {
+                    startTime = endInput.value;
+                } else if (endFixed) {
+                    startTime = endFixed.dataset.value === '24:00' ? '23:00' : endFixed.dataset.value;
+                }
+            }
+            const newEvent = { start_time: startTime, end_time: '24:00', mode: 'black' };
+            container.appendChild(createEventRow(newEvent, containerId));
+            updateFixedTimes(containerId);
+            checkScheduleChanges();
+        }
+
+        // Collect events from a container
+        function collectEvents(containerId) {
+            const container = document.getElementById(containerId);
+            const rows = container.querySelectorAll('.event-row');
+            const events = [];
+            rows.forEach(row => {
+                // Get start time from input or fixed span
+                const startInput = row.querySelector('.event-start');
+                const startFixed = row.querySelector('.event-start-fixed');
+                const startTime = startInput ? startInput.value : (startFixed ? startFixed.dataset.value : '00:00');
+
+                // Get end time from input or fixed span
+                const endInput = row.querySelector('.event-end');
+                const endFixed = row.querySelector('.event-end-fixed');
+                let endTime = endInput ? endInput.value : (endFixed ? endFixed.dataset.value : '24:00');
+
+                // Convert 23:59 to 24:00 for storage
+                if (endTime === '23:59') endTime = '24:00';
+
+                const select = row.querySelector('.event-mode');
+                events.push({
+                    start_time: startTime,
+                    end_time: endTime,
+                    mode: select.value
+                });
+            });
+            return events;
+        }
+
+        // Validate schedule for gaps and overlaps
+        function validateSchedule(containerId) {
+            const events = collectEvents(containerId);
+            if (events.length === 0) return { valid: true };
+
+            // Convert time string to minutes for comparison
+            const toMinutes = (t) => {
+                if (t === '24:00') return 24 * 60;
+                const [h, m] = t.split(':').map(Number);
+                return h * 60 + m;
+            };
+
+            // Sort events by start time
+            events.sort((a, b) => toMinutes(a.start_time) - toMinutes(b.start_time));
+
+            const errors = [];
+
+            // Check that first event starts at 00:00
+            if (events[0].start_time !== '00:00') {
+                errors.push(`Schedule must start at 12:00 AM (found ${formatTimeDisplay(events[0].start_time)})`);
+            }
+
+            // Check that last event ends at 24:00
+            if (events[events.length - 1].end_time !== '24:00') {
+                errors.push(`Schedule must end at 12:00 AM (found ${formatTimeDisplay(events[events.length - 1].end_time)})`);
+            }
+
+            // Check each event and gaps/overlaps between consecutive events
+            for (let i = 0; i < events.length; i++) {
+                const event = events[i];
+                const startMins = toMinutes(event.start_time);
+                const endMins = toMinutes(event.end_time);
+
+                // Check that end > start
+                if (endMins <= startMins) {
+                    errors.push(`Period ${i + 1}: End time must be after start time`);
+                    continue;
+                }
+
+                // Check gap/overlap with next event
+                if (i < events.length - 1) {
+                    const nextEvent = events[i + 1];
+                    const nextStartMins = toMinutes(nextEvent.start_time);
+
+                    if (endMins < nextStartMins) {
+                        errors.push(`Gap between ${formatTimeDisplay(event.end_time)} and ${formatTimeDisplay(nextEvent.start_time)}`);
+                    } else if (endMins > nextStartMins) {
+                        errors.push(`Overlap between periods ending at ${formatTimeDisplay(event.end_time)} and starting at ${formatTimeDisplay(nextEvent.start_time)}`);
                     }
                 }
+            }
+
+            return { valid: errors.length === 0, errors };
+        }
+
+        // Get current schedule state for comparison
+        function getScheduleState() {
+            return JSON.stringify({
+                default_screensaver_mode: document.getElementById('default-screensaver-mode').value,
+                schedule_enabled: document.getElementById('schedule-enabled-control').checked,
+                weekday_events: collectEvents('weekday-events'),
+                weekend_events: collectEvents('weekend-events'),
+                holidays_use_weekend: document.getElementById('holidays-use-weekend').checked,
+                countries: Array.from(document.querySelectorAll('.holiday-country:checked')).map(cb => cb.value).sort()
             });
+        }
+
+        // Check if schedule has changes
+        function checkScheduleChanges() {
+            const btn = document.getElementById('btn-save-schedule');
+            const hasChanges = scheduleOriginalState !== getScheduleState();
             btn.disabled = !hasChanges;
         }
 
-        // Track off-hours-mode changes
-        document.getElementById('off-hours-mode').addEventListener('change', checkScheduleChanges);
+        // Load schedule from API
+        async function loadScheduleEvents() {
+            try {
+                const data = await apiCall('/api/schedule/events', 'GET');
 
-        // Initialize schedule tracking
-        captureScheduleOriginalValues();
-        document.getElementById('btn-save-schedule').disabled = true;
-        scheduleInputs.forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.addEventListener('change', checkScheduleChanges);
-                if (el.type === 'number' || el.type === 'text' || el.tagName === 'TEXTAREA') {
-                    el.addEventListener('input', checkScheduleChanges);
-                }
+                // Set default screensaver mode
+                document.getElementById('default-screensaver-mode').value = data.default_screensaver_mode || 'black';
+
+                // Set schedule enabled
+                document.getElementById('schedule-enabled-control').checked = data.enabled;
+
+                // Render event lists
+                renderEventList('weekday-events', data.weekday_events || []);
+                renderEventList('weekend-events', data.weekend_events || []);
+
+                // Set holidays
+                const useWeekend = data.holidays?.use_weekend_schedule || false;
+                document.getElementById('holidays-use-weekend').checked = useWeekend;
+                document.getElementById('holiday-countries').style.display = useWeekend ? 'block' : 'none';
+
+                // Set country checkboxes
+                const countries = data.holidays?.countries || [];
+                document.querySelectorAll('.holiday-country').forEach(cb => {
+                    cb.checked = countries.includes(cb.value);
+                });
+
+                // Capture original state
+                scheduleOriginalState = getScheduleState();
+                document.getElementById('btn-save-schedule').disabled = true;
+            } catch (e) {
+                console.error('Error loading schedule:', e);
             }
+        }
+
+        // Show/hide holiday countries based on checkbox
+        document.getElementById('holidays-use-weekend').addEventListener('change', (e) => {
+            document.getElementById('holiday-countries').style.display = e.target.checked ? 'block' : 'none';
+            checkScheduleChanges();
+        });
+
+        // Track changes on other inputs
+        document.getElementById('default-screensaver-mode').addEventListener('change', checkScheduleChanges);
+        document.getElementById('schedule-enabled-control').addEventListener('change', checkScheduleChanges);
+        document.querySelectorAll('.holiday-country').forEach(cb => {
+            cb.addEventListener('change', checkScheduleChanges);
         });
 
         // Save schedule settings
         document.getElementById('btn-save-schedule').addEventListener('click', async () => {
             const btn = document.getElementById('btn-save-schedule');
+
+            // Validate both schedules
+            const weekdayValidation = validateSchedule('weekday-events');
+            const weekendValidation = validateSchedule('weekend-events');
+
+            const allErrors = [];
+            if (!weekdayValidation.valid) {
+                allErrors.push('Weekday schedule:', ...weekdayValidation.errors.map(e => '  • ' + e));
+            }
+            if (!weekendValidation.valid) {
+                allErrors.push('Weekend schedule:', ...weekendValidation.errors.map(e => '  • ' + e));
+            }
+
+            if (allErrors.length > 0) {
+                alert('Please fix schedule errors:\n\n' + allErrors.join('\n'));
+                return;
+            }
+
             btn.disabled = true;
             btn.textContent = 'Saving...';
 
             try {
+                const selectedCountries = Array.from(
+                    document.querySelectorAll('.holiday-country:checked')
+                ).map(cb => cb.value);
+
                 const data = {
-                    weekday_start: document.getElementById('weekday-start').value,
-                    weekday_end: document.getElementById('weekday-end').value,
-                    weekend_start: document.getElementById('weekend-start').value,
-                    weekend_end: document.getElementById('weekend-end').value,
-                    off_hours_mode: document.getElementById('off-hours-mode').value
+                    default_screensaver_mode: document.getElementById('default-screensaver-mode').value,
+                    weekday_events: collectEvents('weekday-events'),
+                    weekend_events: collectEvents('weekend-events'),
+                    holidays: {
+                        use_weekend_schedule: document.getElementById('holidays-use-weekend').checked,
+                        countries: selectedCountries
+                    }
                 };
 
-                const result = await apiCall('/api/schedule', 'POST', data);
+                const result = await apiCall('/api/schedule/events', 'POST', data);
                 if (result.success) {
-                    captureScheduleOriginalValues();
+                    scheduleOriginalState = getScheduleState();
                     btn.textContent = 'Saved!';
                     setTimeout(() => {
                         btn.textContent = 'Save';
@@ -1185,6 +1491,9 @@
                 btn.disabled = false;
             }
         });
+
+        // Load schedule events on page load
+        loadScheduleEvents();
 
         // Track clock settings changes
         const clockInputs = [

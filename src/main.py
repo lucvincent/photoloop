@@ -482,25 +482,25 @@ class PhotoLoop:
         """Main application loop."""
         from .display import DisplayMode
 
-        last_state = None
+        last_mode = None
         current_media = None
 
         while self._running and not self._shutdown_event.is_set():
             try:
-                # Check scheduler state
-                should_show = self.scheduler.should_show_slideshow()
-                current_state = self.scheduler.get_current_state()
+                # Get scheduled display mode from scheduler
+                # Returns "slideshow", "clock", or "black"
+                display_mode = self.scheduler.get_display_mode()
 
-                # Log state changes
-                if current_state != last_state:
-                    logger.info(f"State changed: {current_state.value}")
-                    last_state = current_state
-
-                # Update display mode
                 # Check if there's any content to display
                 has_content = self.cache_manager.has_displayable_media()
 
-                if should_show and has_content:
+                # Log mode changes
+                if display_mode != last_mode:
+                    logger.info(f"Display mode changed: {display_mode}")
+                    last_mode = display_mode
+
+                # Map scheduler mode to display mode
+                if display_mode == "slideshow" and has_content:
                     self.display.set_mode(DisplayMode.SLIDESHOW)
 
                     # Check if we need to load a new photo
@@ -582,20 +582,25 @@ class PhotoLoop:
                             logger.info(f"Displaying: {os.path.basename(next_media.local_path)}")
                         elif current_media is None:
                             logger.warning("No media available to display")
-                elif not has_content:
-                    # No content to display - behave like STOP, respecting off_hours_mode
+
+                elif display_mode == "slideshow" and not has_content:
+                    # Slideshow scheduled but no content - use default screensaver mode
                     current_media = None
-                    if self.config.schedule.off_hours_mode == 'clock':
+                    fallback_mode = self.config.schedule.default_screensaver_mode
+                    if fallback_mode == 'clock':
                         self.display.set_mode(DisplayMode.CLOCK)
                     else:
                         self.display.set_mode(DisplayMode.BLACK)
-                else:
-                    # Off-hours mode
+
+                elif display_mode == "clock":
+                    # Clock mode from schedule
                     current_media = None  # Reset so we load fresh when resuming
-                    if self.config.schedule.off_hours_mode == 'clock':
-                        self.display.set_mode(DisplayMode.CLOCK)
-                    else:
-                        self.display.set_mode(DisplayMode.BLACK)
+                    self.display.set_mode(DisplayMode.CLOCK)
+
+                else:
+                    # Black mode (display off / DPMS standby)
+                    current_media = None  # Reset so we load fresh when resuming
+                    self.display.set_mode(DisplayMode.BLACK)
 
                 # Run display update (handles events, transitions, etc.)
                 # Note: display.update() includes clock.tick() for frame rate control

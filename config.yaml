@@ -1,600 +1,548 @@
 # Copyright (c) 2025 Luc Vincent. All Rights Reserved.
 # ============================================================
-# PhotoLoop Configuration
+#                    PhotoLoop Configuration
 # ============================================================
 #
-# This file controls all aspects of your PhotoLoop photo frame.
-# Edit this file directly or use the web interface at:
+# Digital photo frame software for Raspberry Pi.
+# Displays photos from Google Photos albums or local directories.
+#
+# Edit this file directly or use the web dashboard at:
 #   http://<raspberry-pi-ip>:8080
 #
-# After editing, restart PhotoLoop or use 'photoloop reload'
+# After editing, restart PhotoLoop: sudo systemctl restart photoloop
+#
+# This file is organized to match the dashboard tabs:
+#   1. Albums    - Photo sources (Google Photos, local folders)
+#   2. Display   - Slideshow appearance, scaling, overlays
+#   3. Screensaver - Schedule and display modes
+#   4. Clock     - Clock display, weather, news ticker
+#   5. Cache     - Photo storage settings
+#
 # ============================================================
 
-# ------------------------------------------------------------
-# Local Albums Settings - Directory browser for local photos
-# ------------------------------------------------------------
-# Control whether users can add local directories via the web UI
-local_albums:
-  enabled: true                              # Allow adding local directories
-  browse_paths: ["/home", "/media", "/mnt"]  # Paths users can browse
-  show_photo_counts: true                    # Show image count (slower browsing)
+
+# ############################################################
+#                    WEB DASHBOARD
+# ############################################################
+# PhotoLoop includes a web dashboard for configuration and control.
+#
+# Accessing the dashboard:
+#   - From any device on your network: http://<pi-ip>:8080
+#   - Find your Pi's IP: hostname -I
+#   - Works on desktop browsers, tablets, and phones
+#   - Add to phone home screen for app-like experience (PWA)
+#
+# Dashboard features:
+#   - Configure all settings below via a visual interface
+#   - Control slideshow (start/stop/next/previous)
+#   - View current photo and cache statistics
+#   - Trigger album sync manually
+#
+web:
+  enabled: true                          # Enable web dashboard
+  port: 8080                             # HTTP port
+  host: "0.0.0.0"                        # 0.0.0.0 = network, 127.0.0.1 = local only
+
+
+# ############################################################
+#                     1. ALBUMS
+# ############################################################
+# Configure photo sources: Google Photos albums and local directories.
 
 # ------------------------------------------------------------
-# Albums - List of public Google Photos album URLs to display
+# Albums - Photo sources to display
 # ------------------------------------------------------------
-# Add one or more public (world-visible) Google Photos albums.
-# You can use either the short URL (photos.app.goo.gl/...) or
-# the full URL (photos.google.com/share/...)
+# Add public Google Photos albums or local directories.
 #
+# Google Photos: Use the sharing link (photos.app.goo.gl/...)
 # To make an album public:
 #   1. Open Google Photos and go to the album
 #   2. Click Share > Get link
 #   3. Set "Link sharing" to ON
-#   4. Copy the link and paste it below
+#   4. Copy the link and paste below
+#
+# Local directories: Use 'path' instead of 'url', set type: local
+#
+# Fields:
+#   url:     Google Photos sharing URL (for google_photos type)
+#   path:    Local directory path (for local type)
+#   name:    Display name shown in dashboard and logs
+#   type:    "google_photos" or "local" (auto-detected if omitted)
+#   enabled: true/false - whether to include in slideshow
 #
 albums:
   - url: "https://photos.app.goo.gl/YOUR_ALBUM_URL_HERE"
-    name: "My Photos"    # Optional friendly name (shown in logs/web UI)
+    name: "My Photos"
+    enabled: true
+    type: google_photos
   # Add more albums:
   # - url: "https://photos.app.goo.gl/ANOTHER_ALBUM"
   #   name: "Vacation 2024"
-  # - url: "https://photos.app.goo.gl/YET_ANOTHER"
-  #   name: "Family Events"
+  #   enabled: true
+  #   type: google_photos
+  # - path: "/home/pi/photos"
+  #   name: "Local Photos"
+  #   enabled: true
+  #   type: local
 
 # ------------------------------------------------------------
-# Sync Settings - How often to check for new photos/videos
+# Local Albums Browser (Dashboard: Albums tab)
 # ------------------------------------------------------------
+# Control directory browsing in the web UI.
+#
+# enabled:          Allow adding local directories via dashboard
+# browse_paths:     List of paths users can browse (security restriction)
+# show_photo_counts: Count images per directory (slower but informative)
+#
+# Security notes:
+# - Set enabled: false to completely disable local directory support
+# - browse_paths restricts which directories users can browse via the web UI
+# - Hidden directories (starting with '.') are never shown
+# - Only directories within browse_paths can be selected
+#
+# Note: Photo counts show files in that directory only, not subdirectories.
+# However, when added as an album, all subdirectories ARE scanned recursively.
+#
+local_albums:
+  enabled: true
+  browse_paths: ["/home", "/media", "/mnt"]
+  show_photo_counts: true
+
+# ------------------------------------------------------------
+# Sync Settings
+# ------------------------------------------------------------
+# How often to check for new photos in albums.
+#
+# interval_minutes: How often to sync (1440 = daily, 0 = disabled)
+# sync_time:        Time for first sync (24h format), then every interval
+# sync_on_start:    Sync immediately on service start
+# full_resolution:  Download original quality (recommended for 4K displays)
+# max_dimension:    Max size if full_resolution is false
+#
+# Sync behavior:
+# - If sync_time is set, first scheduled sync happens at that time
+# - sync_on_start is independent of sync_time
+# - Only enabled albums (marked "Show" in Albums tab) are synced
+#
+# Examples:
+# - Sync daily at 3am: sync_time: "03:00", interval_minutes: 1440
+# - Sync hourly starting at midnight: sync_time: "00:00", interval_minutes: 60
+# - Sync every 6 hours from service start: omit sync_time, interval_minutes: 360
+#
 sync:
-  # How often to automatically sync albums (in minutes)
-  # Default: 1440 (24 hours) - syncing is slow due to caption fetching
-  # Set to 0 to disable automatic sync (manual only via web interface or CLI)
-  # Tradeoff: More frequent = more up-to-date, but uses more bandwidth/CPU
   interval_minutes: 1440
-
-  # Time of day for scheduled sync (24-hour format HH:MM)
-  # The first automatic sync will occur at this time, then every interval_minutes after.
-  # If omitted, sync starts interval_minutes after service start.
-  # Examples:
-  #   "03:00" - Sync at 3 AM (good for overnight updates)
-  #   "12:00" - Sync at noon
   sync_time: "03:00"
-
-  # Whether to sync immediately when the service starts
-  # true = sync right away on startup (useful after adding new albums)
-  # false = wait for scheduled sync time
-  # Note: This is independent of sync_time - both can trigger syncs
   sync_on_start: false
-
-  # Download resolution
-  # true = original quality (larger files, best quality)
-  # false = limit to max_dimension (smaller files, faster downloads)
-  # Tradeoff: Full resolution uses more storage but looks better on 4K displays
   full_resolution: true
-  max_dimension: 1920        # Max width/height if full_resolution is false
-                             # Use 3840 for 4K displays
+  max_dimension: 1920
+
+
+# ############################################################
+#                     2. DISPLAY
+# ############################################################
+# Slideshow appearance: timing, transitions, scaling, overlays.
 
 # ------------------------------------------------------------
-# Display Settings - Slideshow appearance and behavior
+# Display Settings (Dashboard: Display tab)
 # ------------------------------------------------------------
+# resolution:              "auto" detects screen, or specify "1920x1080", "3840x2160"
+# photo_duration_seconds:  How long each photo is shown
+# video_enabled:           Include videos in slideshow (requires ffpyplayer)
+#
+# Transition settings:
+# transition_type:         fade, slide_left, slide_right, slide_up, slide_down, random
+# transition_duration_ms:  Transition length in milliseconds
+#
+# Photo order options:
+# - random:           Shuffled order, re-shuffled each time playlist loops
+# - recency_weighted: Random with recency bias - recent photos appear more often
+# - alphabetical:     Sorted by filename (case-insensitive)
+# - chronological:    Sorted by date (oldest first)
+#
+# Recency-weighted settings (when order: "recency_weighted"):
+# recency_cutoff_years: Photos older than this get minimum weight
+# recency_min_weight:   Weight for old photos (0.33 = 1/3 as likely as new photos)
+#
+# Weight formula: Linear decay from 1.0 (today) to recency_min_weight (at cutoff).
+# Photos older than cutoff all have recency_min_weight. Every photo still appears
+# once per cycle, but recent photos tend to appear earlier in the shuffled order.
+#
+# Date priority (for chronological and recency_weighted modes):
+# 1. EXIF date (embedded in photo metadata)
+# 2. Google Photos date (scraped from album)
+# 3. File modification time (fallback if no date metadata)
+#
+# Display power control for off-hours:
+# power_control: auto, wlopm (Wayland), cec (HDMI-CEC for TVs), none
+#
 display:
-  # Resolution: "auto" detects screen size automatically
-  # Or specify explicitly: "1920x1080", "3840x2160" (4K), "1280x720"
-  resolution: "auto"
-
-  photo_duration_seconds: 30       # How long each photo is shown
-  video_enabled: true              # Set to false to skip videos entirely
-
-  # Transition between photos
-  # Options: fade, slide_left, slide_right, slide_up, slide_down, random
-  transition_type: "fade"
-  transition_duration_ms: 1000     # Transition animation length in milliseconds
-
-  # Photo order - how photos are sequenced in the slideshow
-  # Options:
-  #   "random"           - Shuffled randomly, re-shuffled each cycle
-  #   "recency_weighted" - Random with recency bias (recent photos appear more often)
-  #   "alphabetical"     - Sorted by filename (case-insensitive)
-  #   "chronological"    - Sorted by date (oldest first)
-  #
-  # Date priority for chronological/recency_weighted:
-  #   1. EXIF date (embedded in photo metadata)
-  #   2. Google Photos date (scraped from album)
-  #   3. File modification time (fallback)
-  order: "random"
-
-  # Recency-weighted mode settings (only used when order: "recency_weighted")
-  # This mode biases toward showing recent photos more frequently while still
-  # ensuring all photos appear at least once per cycle.
-  #
-  # How it works:
-  #   - Photos are weighted by age: newer photos get higher weight
-  #   - Weight decays linearly from 1.0 (today) to recency_min_weight (at cutoff)
-  #   - Photos older than recency_cutoff_years all have the same minimum weight
-  #   - Higher-weighted photos tend to appear earlier in each shuffled cycle
-  #
-  # recency_cutoff_years: Photos older than this have equal (minimum) weight
-  #   - 5.0 = photos from 5+ years ago are weighted equally
-  #   - 1.0 = only last year's photos get boosted
-  #   - 10.0 = gradual decay over a decade
-  recency_cutoff_years: 5.0
-
-  # recency_min_weight: Weight for photos at/beyond the cutoff age
-  #   - 0.33 = old photos are 1/3 as likely to appear early as new photos
-  #   - 0.1 = old photos are 1/10 as likely (strong recency bias)
-  #   - 1.0 = no recency bias (equivalent to "random")
-  recency_min_weight: 0.33
-
-  # Display power control method for off-hours and stop/start
-  # Controls how the physical display is turned off to save power
-  #   "auto"  - Try methods in order: wlopm → CEC → black screen (default)
-  #   "wlopm" - Wayland DPMS only (for monitors on labwc/Wayland)
-  #   "cec"   - HDMI-CEC only (for TVs that support CEC)
-  #   "none"  - Just show black screen, don't control display power
-  #
-  # Notes:
-  #   - "wlopm" requires wlopm and wlr-randr packages (installed by default)
-  #   - "cec" requires cec-utils package and TV with HDMI-CEC support
-  #   - "none" is useful if power control causes issues with your display
-  power_control: "auto"
+  resolution: "auto"                   # "auto" or "1920x1080" or "3840x2160"
+  photo_duration_seconds: 30           # Seconds per photo
+  video_enabled: true                  # Include videos in slideshow
+  transition_type: "fade"              # fade, slide_left/right/up/down, random
+  transition_duration_ms: 1000         # Transition length in milliseconds
+  order: "random"                      # random, recency_weighted, alphabetical, chronological
+  recency_cutoff_years: 5.0            # For recency_weighted: age for minimum weight
+  recency_min_weight: 0.33             # For recency_weighted: weight at cutoff (0.33 = 1/3)
+  power_control: "auto"                # auto, wlopm, cec, none
 
 # ------------------------------------------------------------
-# Scaling and Cropping - How photos fill the screen
+# Scaling and Cropping (Dashboard: Display tab)
 # ------------------------------------------------------------
+# How photos fit the screen when aspect ratios don't match.
+#
+# mode:             How photos fit the screen
+#   - fill:         Crop to fill screen (may cut edges)
+#   - fit:          Show entire photo with black bars (letterbox/pillarbox)
+#   - balanced:     Compromise - crop up to max_crop_percent, then add bars
+#   - stretch:      Distort to fill (not recommended)
+#
+# max_crop_percent: For balanced mode: max crop before adding bars
+# background_color: RGB color for letterbox/pillarbox bars [R, G, B]
+#
+# Smart cropping - find the best region to show when cropping:
+# smart_crop:        Enable intelligent crop region selection
+# smart_crop_method: face (detect faces), saliency (detect interesting areas), hybrid
+#
+# Face detection settings:
+# face_detection:  Enable face detection for smart cropping
+# face_position:   Where to position detected faces
+#   - center:         Center faces in frame
+#   - rule_of_thirds: Position faces at rule-of-thirds intersection
+#   - top_third:      Position faces in upper third
+#
+# Fallback when no faces found:
+# fallback_crop: center, top, bottom
+# crop_bias:     center, top, bottom (bias direction when cropping)
+#
+# Saliency detection settings (when smart_crop_method includes saliency):
+# saliency_threshold: Minimum saliency score (0.0-1.0)
+# saliency_coverage:  Target coverage of salient regions (0.0-1.0)
+#
 scaling:
-  # Scaling mode determines how photos fit the screen:
-  #   "fill"     - Scale to fill entire screen, crop excess (no black bars)
-  #   "fit"      - Scale to fit within screen, may have black bars
-  #   "balanced" - Crop up to max_crop_percent, then show bars for the rest
-  #                (good compromise between fill and fit)
-  #   "stretch"  - Stretch to fill (distorts aspect ratio - not recommended)
-  mode: "fill"
-
-  # For "balanced" mode: maximum percentage of image that can be cropped (0-50)
-  # Lower values = more bars but less cropping, higher = more cropping
-  # Example: 15 means crop up to 15% before showing bars
-  max_crop_percent: 15
-
-  # Background color for letterbox/pillarbox bars (fit and balanced modes)
-  # RGB color [R, G, B] where each value is 0-255
-  background_color: [0, 0, 0]      # Black bars (default)
-  # background_color: [32, 32, 32]  # Dark gray bars
-
-  # Smart cropping (applies to fill and balanced modes)
-  # When enabled, uses intelligent algorithms to find the best crop region
-  # Tradeoff: Enabled = better framing but slightly slower image processing
-  smart_crop: true
-
-  # Smart crop method - which algorithm to use for finding crop regions
-  # Options:
-  #   "face"     - Use face detection (best for photos with people)
-  #   "saliency" - Use saliency detection (finds visually interesting regions)
-  #   "hybrid"   - Try face detection first, fall back to saliency if no faces
-  #
-  # Tradeoff:
-  #   - "face": Fast, works great for portraits/group photos, ignores non-face subjects
-  #   - "saliency": Slower (~200ms/photo), works for any subject (landscapes, objects)
-  #   - "hybrid": Most versatile but slowest (tries both methods)
-  smart_crop_method: "face"
-
-  # Face detection settings (used when smart_crop_method is "face" or "hybrid")
-  # Uses YuNet neural network model for accurate detection
-  #
-  # Tradeoff:
-  #   - true: Faces stay visible in cropped photos, but adds ~50-100ms
-  #     processing time per photo and uses more CPU
-  #   - false: Faster processing, but faces may be partially cropped
-  face_detection: true
-
-  # Where to position detected faces after cropping
-  # Options:
-  #   "center"         - Center faces in the frame
-  #   "rule_of_thirds" - Position faces at rule-of-thirds intersection points
-  #   "top_third"      - Position faces in upper third (good for portraits)
-  face_position: "center"
-
-  # Fallback crop position when no faces/salient regions are detected
-  # Options: "center", "top", "bottom"
-  fallback_crop: "center"
-
-  # Crop bias - when cropping is needed, which direction to prefer
-  # Options:
-  #   "center" - Crop equally from both sides
-  #   "top"    - Preserve top of image, crop from bottom (good for landscapes with sky)
-  #   "bottom" - Preserve bottom of image, crop from top
-  # Only applies when smart cropping doesn't find a specific region to preserve
-  crop_bias: "center"
-
-  # Saliency detection settings (used when smart_crop_method is "saliency" or "hybrid")
-  # Saliency detection uses a neural network (U2-Net) to find visually important regions
-  #
-  # saliency_threshold: Minimum saliency score to consider a pixel "important" (0.0-1.0)
-  #   - 0.3 = include moderately salient regions (more inclusive)
-  #   - 0.5 = only highly salient regions (more selective)
-  #   - Lower values = larger "important" regions, more context preserved
-  saliency_threshold: 0.3
-
-  # saliency_coverage: What fraction of the salient region must fit in the crop (0.0-1.0)
-  #   - 0.9 = crop must contain 90% of the detected salient area
-  #   - 0.7 = more aggressive cropping allowed, may cut some salient edges
-  #   - Higher values = safer crops but may need more black bars
-  saliency_coverage: 0.9
+  mode: "fill"                         # fill, fit, balanced, stretch
+  max_crop_percent: 15                 # For balanced: max crop before adding bars
+  background_color: [0, 0, 0]          # RGB for letterbox/pillarbox bars
+  smart_crop: true                     # Enable intelligent crop region selection
+  smart_crop_method: "face"            # face, saliency, hybrid
+  face_detection: true                 # Enable face detection
+  face_position: "center"              # center, rule_of_thirds, top_third
+  fallback_crop: "center"              # center, top, bottom (when no faces)
+  crop_bias: "center"                  # center, top, bottom
+  saliency_threshold: 0.3              # 0.0-1.0
+  saliency_coverage: 0.9               # 0.0-1.0
 
 # ------------------------------------------------------------
-# Ken Burns Effect - Slow zoom/pan during photo display
+# Ken Burns Effect (Experimental)
 # ------------------------------------------------------------
-# EXPERIMENTAL: Ken Burns Effect
-# Adds subtle motion to still photos by slowly zooming and panning.
+# Slow zoom/pan during photo display for a cinematic effect.
 #
-# WARNING: This feature is experimental and has known issues:
+# WARNING: This feature is experimental with known issues:
 # - Stretched images during transitions
-# - Poor results with panoramas
-# - May show aliasing artifacts
-# See CLAUDE.md "Ken Burns Effect - Disabled (Needs Rework)" for details.
+# - Panoramas don't work well (shows small vertical slice)
+# - May have aliasing artifacts during animation
+# Disabled by default. Enable at your own risk.
 #
-# Disabled by default. Enable at your own risk - your mileage may vary.
+# enabled:    Enable Ken Burns effect
+# zoom_range: [min, max] zoom levels (1.0 = no zoom, 1.15 = 15% zoom)
+# pan_speed:  Movement speed for panning
+# randomize:  Vary zoom/pan direction randomly
+#
 ken_burns:
   enabled: false
-
-  # Zoom range: [minimum, maximum]
-  # 1.0 = no zoom, 1.15 = 15% zoom in
-  # The effect will zoom between these values
-  # Tradeoff: Larger range = more dramatic effect but may crop important edges
   zoom_range: [1.0, 1.15]
-
-  # Pan speed as fraction of image dimension per second
-  # 0.02 = move 2% of image width/height per second
-  # Tradeoff: Higher = more noticeable motion; Lower = subtler, calmer effect
   pan_speed: 0.02
-
-  # Randomize zoom direction and pan path
-  # true = varied, unpredictable motion
-  # false = consistent, repeating patterns
   randomize: true
 
 # ------------------------------------------------------------
-# Overlay Settings - Photo date and caption display
+# Overlay Settings (Dashboard: Display tab)
 # ------------------------------------------------------------
-# Shows photo information overlaid on the image during display
+# Photo date and caption display overlaid on photos.
+#
+# enabled:      Show overlay on photos
+# show_date:    Display photo date
+# show_caption: Display photo caption/description
+#
+# date_format:  Python strftime format string
+#               %B = full month, %d = day, %Y = year
+#               Examples: "%B %d, %Y" -> "January 15, 2024"
+#                         "%Y-%m-%d" -> "2024-01-15"
+#
+# date_source:  Where to get the date from
+#   - exif_first:   Try EXIF metadata first, fall back to Google Photos
+#   - google_first: Try Google Photos first, fall back to EXIF
+#   - exif_only:    Only use EXIF metadata
+#   - google_only:  Only use Google Photos date
+#
+# position:     Overlay position: bottom_left, bottom_right, top_left, top_right
+# font_size:    Text size in pixels
+# font_color:   RGB color for text [R, G, B]
+# background_color: RGBA for overlay background [R, G, B, A] (A=0-255 for transparency)
+# padding:      Pixels of padding around text
+# max_caption_length: Truncate captions longer than this
+#
+# Caption source priorities (lower number = higher priority):
+# caption_sources:
+#   google_caption:   Caption from Google Photos
+#   embedded_caption: Caption embedded in image metadata (EXIF/IPTC)
+#   google_location:  Location from Google Photos
+#   exif_location:    Location from EXIF GPS coordinates (reverse geocoded)
+#
+# max_caption_sources: How many caption sources to combine
+# caption_separator:   Text between combined caption sources
+#
 overlay:
-  enabled: true
-
-  # What information to show
-  show_date: true                  # Photo date from EXIF/metadata
-  show_caption: true               # Description/caption if available
-
-  # Date formatting (Python strftime format)
-  # Examples:
-  #   "%B %d, %Y"    -> "January 15, 2024"
-  #   "%Y-%m-%d"     -> "2024-01-15"
-  #   "%d/%m/%Y"     -> "15/01/2024"
-  #   "%b %d, %Y"    -> "Jan 15, 2024"
-  date_format: "%B %d, %Y"
-
-  # Date source preference - which date to display when multiple are available
-  # Options:
-  #   "exif_first"   - Use EXIF date if available, fall back to Google Photos date (default)
-  #   "google_first" - Use Google Photos date if available, fall back to EXIF date
-  #   "exif_only"    - Only show EXIF date, never Google Photos date
-  #   "google_only"  - Only show Google Photos date, never EXIF date
-  #
-  # Note:
-  #   - EXIF date: Embedded in photo file metadata (when photo was actually taken)
-  #   - Google date: Scraped from Google Photos album (may be upload date or edited date)
-  #   - EXIF is usually more accurate for "when was this photo taken"
-  date_source: "exif_first"
-
-  # Overlay position on screen
-  # Options: bottom_left, bottom_right, top_left, top_right
-  position: "bottom_left"
-
-  # Text appearance
-  font_size: 24                    # Font size in pixels
-  font_color: [255, 255, 255]      # RGB color [R, G, B]
-                                   # [255, 255, 255] = white
-                                   # [255, 255, 0] = yellow
-
-  # Background behind text (improves readability)
-  background_color: [0, 0, 0, 128] # RGBA [R, G, B, Alpha]
-                                   # [0, 0, 0, 128] = semi-transparent black
-                                   # Alpha: 0 = transparent, 255 = opaque
-
-  padding: 20                      # Distance from screen edge in pixels
-  max_caption_length: 200          # Truncate long captions (0 = no limit)
-
-  # Caption source priorities (lower number = higher priority)
-  # Available sources:
-  #   google_caption   - Description from Google Photos (user-entered)
-  #   embedded_caption - Caption from EXIF/IPTC metadata in photo file
-  #   google_location  - Location from Google Photos info panel
-  #   exif_location    - Reverse-geocoded location from EXIF GPS coordinates
-  #
-  # Only include sources you want to display. Omit a source to never show it.
-  # Duplicate values (e.g., same caption in Google and EXIF) are automatically skipped.
-  caption_sources:
+  enabled: true                        # Show overlay on photos
+  show_date: true                      # Display photo date
+  show_caption: true                   # Display photo caption
+  date_format: "%B %d, %Y"             # strftime format (January 15, 2024)
+  date_source: "exif_first"            # exif_first, google_first, exif_only, google_only
+  position: "bottom_left"              # bottom_left/right, top_left/right
+  font_size: 24                        # Text size in pixels
+  font_color: [255, 255, 255]          # RGB white
+  background_color: [0, 0, 0, 128]     # RGBA semi-transparent black
+  padding: 20                          # Pixels around text
+  max_caption_length: 200              # Truncate longer captions
+  caption_sources:                     # Priority order (lower = higher priority)
     google_caption: 1
     embedded_caption: 2
     google_location: 3
     exif_location: 4
+  max_caption_sources: 1               # How many sources to combine
+  caption_separator: " — "             # Between combined sources
 
-  # How many caption sources to show (after deduplication)
-  # 1 = only highest priority source with data
-  # 2 = top two sources (e.g., caption + location)
-  max_caption_sources: 1
 
-  # Separator between multiple caption sources (when max_caption_sources > 1)
-  caption_separator: " — "
+# ############################################################
+#                   3. SCREENSAVER
+# ############################################################
+# Schedule when to show slideshow, clock, or turn off display.
+# The display can be in one of three modes:
+#   - slideshow: Show photos
+#   - clock:     Show clock (with optional weather and news)
+#   - black:     Turn off display (DPMS standby to save power)
 
 # ------------------------------------------------------------
-# Schedule - When to display slideshow vs off-hours mode
+# Schedule (Dashboard: Screensaver tab)
 # ------------------------------------------------------------
-# Configure when the slideshow runs. Outside scheduled hours,
-# the display will either power off or show a clock.
+# enabled: Enable/disable the schedule (if disabled, slideshow runs continuously)
+#
+# default_screensaver_mode: What to show when:
+#   - User manually stops the slideshow
+#   - No photos are available (sync not complete, all albums disabled)
+#   Options: "black" (display off) or "clock"
+#
+# Event-based scheduling:
+# Define time periods for weekdays (Mon-Fri) and weekends (Sat-Sun).
+# Each event specifies: start_time, end_time, mode
+#
+# Time format: 'HH:MM' (24-hour, MUST be quoted to avoid YAML parsing issues)
+# Use '24:00' for end of day (midnight)
+#
+# IMPORTANT: Events must:
+#   - Cover the full day (00:00 to 24:00)
+#   - Not have gaps or overlaps
+#   - Have times in quotes to prevent YAML sexagesimal interpretation
+#
+# Holiday settings:
+# use_weekend_schedule: Apply weekend schedule on holidays
+# countries:            List of ISO 3166-1 alpha-2 country codes
+#
+# Available country codes (partial list):
+#   Americas: US, CA, MX, BR, AR, CL, CO
+#   Europe:   GB, DE, FR, IT, ES, NL, BE, AT, CH, IE, PT, PL, SE, NO, DK, FI
+#   Asia:     JP, CN, KR, IN, SG, HK, TW, TH, MY, PH, ID, VN
+#   Oceania:  AU, NZ
+#   Other:    IL, ZA, EG, RU, UA, TR
+#
+# overrides: Temporary schedule overrides (managed via web UI, auto-expire)
+#
 schedule:
-  enabled: true
+  enabled: true                        # Enable schedule (false = slideshow runs 24/7)
+  default_screensaver_mode: "black"    # black or clock
 
-  # What to do outside scheduled hours
-  # Options:
-  #   "black" - Power off the display (saves electricity)
-  #             Uses DDC/CI for monitors or HDMI-CEC for TVs
-  #             Falls back to black screen if neither available
-  #   "clock" - Keep display on and show a simple clock
-  #
-  # Tradeoff:
-  #   - "black": Saves power, extends display lifespan, but display takes
-  #     a few seconds to wake up when schedule resumes
-  #   - "clock": Always-on display, instant slideshow start, but uses more power
-  off_hours_mode: "black"
+  weekday_events:                      # Monday-Friday schedule
+    - start_time: '00:00'
+      end_time: '07:00'
+      mode: black                      # black, clock, or slideshow
+    - start_time: '07:00'
+      end_time: '22:00'
+      mode: slideshow
+    - start_time: '22:00'
+      end_time: '24:00'
+      mode: black
 
-  # Weekday schedule (Monday through Friday)
-  weekday:
-    start_time: "07:00"            # 24-hour format HH:MM
-    end_time: "22:00"
+  weekend_events:                      # Saturday-Sunday schedule
+    - start_time: '00:00'
+      end_time: '08:00'
+      mode: black
+    - start_time: '08:00'
+      end_time: '23:00'
+      mode: slideshow
+    - start_time: '23:00'
+      end_time: '24:00'
+      mode: black
 
-  # Weekend schedule (Saturday and Sunday)
-  weekend:
-    start_time: "08:00"            # Sleep in on weekends!
-    end_time: "23:00"              # Stay up later
+  holidays:
+    use_weekend_schedule: false        # Use weekend schedule on holidays
+    countries: []                      # e.g., ["US"] or ["US", "FR", "DE"]
 
-  # Optional: Override schedule for specific days
-  # Uncomment and modify as needed
-  # overrides:
-  #   monday:
-  #     start_time: "06:00"        # Early meetings on Monday
-  #     end_time: "21:00"
-  #   friday:
-  #     start_time: "07:00"
-  #     end_time: "23:30"          # Friday night!
-  #   saturday:
-  #     start_time: "09:00"        # Extra sleep on Saturday
-  #     end_time: "00:00"          # Midnight (use 00:00 for midnight)
+  overrides: {}                        # Managed via web UI
+
+
+# ############################################################
+#                      4. CLOCK
+# ############################################################
+# Clock display shown during scheduled off-hours or when stopped.
+# The clock can optionally show weather and scrolling news headlines.
 
 # ------------------------------------------------------------
-# Rendered Cache - Pre-processed photos for instant display
+# Clock Display (Dashboard: Clock tab)
 # ------------------------------------------------------------
-# PhotoLoop caches photos after cropping at your display's native resolution.
-# This enables instant loading since no image processing is needed.
+# style: Clock style options:
+#   - digital_24h:     24-hour digital (14:30)
+#   - digital_12h:     12-hour digital (2:30 PM)
+#   - digital_seconds: With seconds (14:30:45)
+#   - digital_large:   Extra large digits
+#   - analog_classic:  Traditional analog clock face
+#   - analog_modern:   Modern minimalist analog
+#   - minimal_time:    Time only, no decoration
+#   - minimal_date:    Date only
 #
-# The cache builds up naturally as you view photos. Each rendered frame
-# is stored on disk and loaded instantly on subsequent views.
-rendered_cache:
-  # Enable rendered frame caching (strongly recommended)
-  enabled: true
-
-  # Maximum disk space for rendered frames (in MB)
-  # 0 = no limit (let cache grow freely)
-  # Set a limit if disk space is constrained
-  #
-  # Size estimates (~2-4 MB per rendered frame at 4K):
-  #   - 500 photos → ~1-2 GB
-  #   - 1000 photos → ~2-4 GB
-  #
-  # Note: Rendered frames can be regenerated, so this cache is safe to clear.
-  max_size_mb: 0
-
-  # JPEG quality for cached frames (70-100)
-  # Higher = better quality but larger files
-  #   - 95: Excellent quality, ~2-4 MB per 4K frame (recommended)
-  #   - 90: Good quality, ~1.5-3 MB per frame
-  #   - 85: Acceptable quality, ~1-2 MB per frame
-  quality: 95
-
-# ------------------------------------------------------------
-# Cache Settings - Local storage for photos/videos
-# ------------------------------------------------------------
-cache:
-  # Where to store downloaded photos and videos
-  directory: "/var/lib/photoloop/cache"
-
-  # Maximum cache size in megabytes
-  # When exceeded, oldest photos (by last_seen date) are removed
-  #
-  # Deletion behavior:
-  #   - Photos removed from albums are "soft deleted" (excluded from slideshow)
-  #   - Actual files remain on disk until cache exceeds max_size_mb
-  #   - When limit is exceeded, soft-deleted files are removed first
-  #   - Local directory photos are referenced in-place (not copied to cache)
-  #
-  # Sizing guide:
-  #   - 1080p photos: ~2-5 MB each → 1000 MB ≈ 200-500 photos
-  #   - 4K photos: ~8-15 MB each → 1000 MB ≈ 65-125 photos
-  #   - With full_resolution: true, photos can be 10-20+ MB each
-  #
-  # Tradeoff: Larger cache = more photos available offline,
-  # but uses more SD card space (check with 'df -h')
-  max_size_mb: 1000
-
-# ------------------------------------------------------------
-# Web Interface - Remote configuration via browser
-# ------------------------------------------------------------
-# Access the dashboard at: http://<hostname>.local:<port>
-# Example: http://photopi1.local:8080
-web:
-  enabled: true
-  port: 8080                       # Web interface port (default: 8080)
-  host: "0.0.0.0"                  # "0.0.0.0" = accessible from network
-                                   # "127.0.0.1" = localhost only
-
-  # NOTE: If you change the port above, also update the mDNS service file
-  # so network discovery advertises the correct port:
-  #   sudo nano /etc/avahi/services/photoloop.service
-  # Change <port>8080</port> to match your new port, then restart avahi:
-  #   sudo systemctl restart avahi-daemon
-
-# ------------------------------------------------------------
-# Clock Display - Shown during off-hours when off_hours_mode: "clock"
-# ------------------------------------------------------------
-# Customize the appearance of the clock shown during scheduled off-hours.
-# The clock includes burn-in prevention (subtle position drift) for OLED displays.
+# size:      small, medium, large
+# show_date: Show date below/beside time
+#
 clock:
-  # Clock style - determines the visual appearance of the clock
-  # Options:
-  #   "digital_24h"    - Digital clock with 24-hour format (e.g., 14:30)
-  #   "digital_12h"    - Digital clock with 12-hour format (e.g., 2:30 PM)
-  #   "digital_seconds"- Digital clock showing seconds (e.g., 14:30:45)
-  #   "digital_large"  - Extra large digital display for visibility from distance
-  #   "analog_classic" - Traditional round clock face with hour numbers
-  #   "analog_modern"  - Minimalist analog clock without numbers
-  #   "minimal_time"   - Clean, minimalist time display
-  #   "minimal_date"   - Clean, minimalist date display
-  style: "digital_24h"
-
-  # Size - controls the size of clock, weather, and news text
-  # Options: "small", "medium", "large"
-  # All display elements scale together for visual consistency
-  size: "medium"
-
-  # Whether to show the current date below the time
-  show_date: true
+  style: "digital_24h"                 # digital_24h/12h/seconds/large, analog_classic/modern, minimal_time/date
+  size: "medium"                       # small, medium, large
+  show_date: true                      # Show date below/beside time
 
 # ------------------------------------------------------------
-# Weather Display - Optional weather overlay on clock screen
+# Weather Display (Dashboard: Clock tab)
 # ------------------------------------------------------------
-# Shows current temperature and conditions on the clock display.
-# Uses Open-Meteo API (free, no API key required).
+# Shows current weather next to the clock.
+# Uses Open-Meteo API (free, no API key needed).
+#
+# enabled:                 Show weather on clock screen
+# city_name:               Display name only (not used for weather lookup)
+# latitude/longitude:      GPS coordinates for weather lookup
+#                          Find yours at: https://www.latlong.net/
+# units:                   "fahrenheit" or "celsius"
+# update_interval_minutes: How often to refresh weather data
+# font_size:               Weather text size (0 = auto-scale with clock)
+#
 weather:
-  # Enable/disable weather display
-  enabled: false
-
-  # Location name (for display purposes only, not used for lookup)
-  city_name: ""
-
-  # GPS coordinates for weather data
-  # Find your coordinates: https://www.latlong.net/ or Google Maps
-  # Right-click any location in Google Maps and select the coordinates
-  #
-  # Format: Decimal degrees (not degrees/minutes/seconds)
-  # Example coordinates:
-  #   New York City:    latitude: 40.7128,    longitude: -74.0060
-  #   Los Angeles:      latitude: 34.0522,    longitude: -118.2437
-  #   London:           latitude: 51.5074,    longitude: -0.1278
-  #   Tokyo:            latitude: 35.6762,    longitude: 139.6503
-  latitude: null
-  longitude: null
-
-  # Temperature units: "fahrenheit" or "celsius"
-  units: "fahrenheit"
-
-  # How often to refresh weather data (in minutes)
-  # Weather doesn't change quickly, so 30-60 minutes is usually sufficient
-  update_interval_minutes: 30
-
-  # Text size for weather display (in pixels)
-  # 0 = auto-scale based on clock size setting (recommended for most setups)
-  #
-  # For viewing from across the room, try larger values:
-  #   - 200-250: Readable from ~10-15 feet / 3-5 meters
-  #   - 300-350: Readable from ~15-20 feet / 5-6 meters
-  #
-  # Note: Pygame font sizes render at ~68% of specified height
-  # (e.g., font_size: 300 produces text ~200 pixels tall)
-  #
-  # Auto-scale values (when font_size: 0):
-  #   - Small clock:  ~3.5% of screen height (~76px on 4K)
-  #   - Medium clock: ~4.5% of screen height (~97px on 4K)
-  #   - Large clock:  ~5.5% of screen height (~119px on 4K)
-  font_size: 0
+  enabled: false                       # Show weather on clock screen
+  city_name: ""                        # Display name (cosmetic only)
+  latitude: null                       # GPS latitude (e.g., 37.7749)
+  longitude: null                      # GPS longitude (e.g., -122.4194)
+  units: "fahrenheit"                  # fahrenheit or celsius
+  update_interval_minutes: 30          # How often to refresh
+  font_size: 0                         # 0 = auto-scale with clock
 
 # ------------------------------------------------------------
-# News Headlines - Optional news ticker on clock screen
+# News Headlines (Dashboard: Clock tab)
 # ------------------------------------------------------------
-# Shows scrolling news headlines from RSS feeds on the clock display.
-# Lines starting with # are disabled - remove # to enable a feed.
+# Scrolling news ticker from RSS feeds shown below the clock.
+#
+# enabled:                  Show news ticker
+# feed_urls:                List of RSS feed URLs
+#                           Prefix with "# " to disable a feed
+# refresh_interval_minutes: How often to fetch new headlines
+# max_headlines:            Maximum headlines to display
+# scroll_speed:             Ticker scroll speed in pixels per second
+# font_size:                News text size (0 = auto-scale)
+#
+# Popular RSS feeds (remove "# " prefix to enable):
+#   BBC News:      https://feeds.bbci.co.uk/news/rss.xml
+#   NPR:           https://feeds.npr.org/1001/rss.xml
+#   NY Times:      https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml
+#   The Guardian:  https://www.theguardian.com/world/rss
+#   Reuters:       https://feeds.reuters.com/reuters/topNews
+#   TechCrunch:    https://techcrunch.com/feed/
+#   Ars Technica:  https://feeds.arstechnica.com/arstechnica/index
+#
 news:
-  enabled: false
+  enabled: false                       # Show scrolling news ticker
+  feed_urls:                           # RSS feeds (prefix "# " to disable)
+    - "# https://feeds.bbci.co.uk/news/rss.xml"
+    - "# https://feeds.npr.org/1001/rss.xml"
+    - "# https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"
+    - "# https://techcrunch.com/feed/"
+  refresh_interval_minutes: 5          # How often to fetch headlines
+  max_headlines: 10                    # Max headlines to display
+  scroll_speed: 180                    # Pixels per second
+  font_size: 0                         # 0 = auto-scale
 
-  # RSS feed URLs - lines starting with # are ignored (disabled)
-  # Remove the # at the start of a line to enable that feed
-  feed_urls:
-  # === General News ===
-  - "# https://feeds.bbci.co.uk/news/rss.xml"
-  - "# https://feeds.npr.org/1001/rss.xml"
-  - "# https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"
-  - "# https://www.theguardian.com/world/rss"
-  - "# https://feeds.reuters.com/reuters/topNews"
-  - "# https://feeds.washingtonpost.com/rss/world"
-  - "# https://rss.cnn.com/rss/edition.rss"
-  # === Technology ===
-  - "# https://feeds.arstechnica.com/arstechnica/index"
-  - "# https://www.wired.com/feed/rss"
-  - "# https://techcrunch.com/feed/"
-  - "# https://www.theverge.com/rss/index.xml"
-  # === Business ===
-  - "# https://feeds.bloomberg.com/markets/news.rss"
-  - "# https://www.ft.com/rss/home"
-  # === Science ===
-  - "# https://www.sciencedaily.com/rss/all.xml"
-  - "# https://www.nasa.gov/rss/dyn/breaking_news.rss"
 
-  # How often to fetch new headlines (minutes)
-  refresh_interval_minutes: 5
+# ############################################################
+#                      5. CACHE
+# ############################################################
+# Photo storage and caching settings.
 
-  # Maximum headlines to display
-  max_headlines: 10
+# ------------------------------------------------------------
+# Cache Settings (Dashboard: Cache tab)
+# ------------------------------------------------------------
+# directory:   Where to store downloaded photos
+# max_size_mb: Maximum cache size in MB
+#              When exceeded, oldest soft-deleted photos are removed first
+#
+# Cache behavior:
+# - Photos removed from albums are "soft deleted" (excluded from slideshow)
+# - Actual files remain on disk until cache exceeds max_size_mb
+# - When limit is exceeded, oldest soft-deleted files are removed first
+# - Local directory photos are referenced in-place (not copied to cache)
+#
+cache:
+  directory: "/var/lib/photoloop/cache"  # Where to store downloaded photos
+  max_size_mb: 1000                      # Max size in MB (oldest removed when exceeded)
 
-  # Scrolling speed in pixels per second (higher = faster)
-  # 100-150: Slow, easy to read
-  # 150-200: Moderate (recommended)
-  # 200-300: Fast scrolling
-  scroll_speed: 180
+# ------------------------------------------------------------
+# Rendered Frame Cache
+# ------------------------------------------------------------
+# Pre-renders photos at display resolution for instant loading.
+# Builds up as you view photos. Safe to clear.
+#
+# How it works:
+# 1. When a photo is displayed, it's cropped/scaled to screen resolution
+# 2. The rendered frame is saved as high-quality JPEG to disk
+# 3. Next time the same photo is displayed, it loads instantly from cache
+# 4. Cache is invalidated per-photo when resolution or crop window changes
+#
+# enabled:     Enable rendered frame caching
+# max_size_mb: Maximum disk space for rendered frames (0 = no limit)
+# quality:     JPEG quality for cached frames (70-100, higher = better but larger)
+#
+# Manual cache management:
+#   Check size: du -sh /var/lib/photoloop/cache/rendered/
+#   Clear:      rm -rf /var/lib/photoloop/cache/rendered/
+#
+rendered_cache:
+  enabled: true                          # Cache pre-rendered frames
+  max_size_mb: 0                         # Max disk space (0 = no limit)
+  quality: 95                            # JPEG quality 70-100
 
-  # Text size for news ticker (in pixels)
-  # 0 = auto-scale based on clock size setting (recommended for most setups)
-  #
-  # For viewing from across the room, try larger values:
-  #   - 150-200: Readable from ~10-15 feet / 3-5 meters
-  #   - 200-250: Readable from ~15-20 feet / 5-6 meters
-  #
-  # Note: Pygame font sizes render at ~68% of specified height
-  # Very long headlines are automatically truncated with "..." to fit
-  # within SDL2's 4096px texture width limit.
-  #
-  # Auto-scale values (when font_size: 0):
-  #   - Small clock:  ~3.8% of screen height (~82px on 4K)
-  #   - Medium clock: ~4.8% of screen height (~104px on 4K)
-  #   - Large clock:  ~5.8% of screen height (~125px on 4K)
-  font_size: 0
 
 # ============================================================
-# Quick Start Guide
+#                     QUICK START GUIDE
 # ============================================================
 #
-# 1. Replace the album URL above with your public Google Photos album
-# 2. Run: photoloop sync (to download photos)
-# 3. Run: photoloop start (or let systemd start it)
-# 4. Access web interface: http://<pi-ip>:8080
+# 1. Add your Google Photos album URL above (replace YOUR_ALBUM_URL_HERE)
+# 2. Sync photos:     photoloop sync
+# 3. Start slideshow: photoloop start
+# 4. Open dashboard:  http://<pi-ip>:8080
 #
 # Commands:
-#   photoloop status  - Show current state
-#   photoloop start   - Force slideshow on
-#   photoloop stop    - Force slideshow off
-#   photoloop resume  - Follow schedule
-#   photoloop sync    - Download new photos
-#   photoloop reload  - Reload this config
+#   photoloop status   - Show current state
+#   photoloop start    - Start slideshow
+#   photoloop stop     - Stop slideshow
+#   photoloop next     - Skip to next photo
+#   photoloop sync     - Download new photos
+#   photoloop reload   - Reload configuration
 #
 # Service control:
 #   sudo systemctl start photoloop
 #   sudo systemctl stop photoloop
 #   sudo systemctl restart photoloop
-#   sudo systemctl status photoloop
+#   sudo journalctl -u photoloop -f   (view logs)
 #
 # ============================================================

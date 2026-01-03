@@ -971,3 +971,112 @@ input[type="checkbox"] {
         font-size: 0.75em;
     }
 }
+
+/* Event List Styles */
+.event-list {
+    background: var(--bg-dark);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+}
+
+.event-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    background: var(--bg-medium);
+    border-radius: 6px;
+    margin-bottom: 6px;
+}
+
+.event-row:last-child {
+    margin-bottom: 0;
+}
+
+.event-row input[type="time"] {
+    width: 110px;
+    padding: 6px 8px;
+    font-size: 0.9em;
+}
+
+.event-row .event-time-fixed {
+    display: inline-block;
+    width: 110px;
+    padding: 6px 8px;
+    font-size: 0.9em;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    text-align: center;
+    box-sizing: border-box;
+}
+
+.event-row .event-separator {
+    color: var(--text-muted);
+    font-size: 0.9em;
+}
+
+.event-row select {
+    flex: 1;
+    min-width: 100px;
+    padding: 6px 8px;
+    font-size: 0.9em;
+}
+
+.btn-delete-event {
+    background: transparent;
+    border: none;
+    color: var(--danger);
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 1.2em;
+    line-height: 1;
+    border-radius: 4px;
+    transition: background 0.2s, color 0.2s;
+}
+
+.btn-delete-event:hover {
+    background: var(--danger);
+    color: white;
+}
+
+.btn-add-event {
+    background: var(--bg-dark);
+    border: 2px dashed var(--bg-light);
+    color: var(--sage-accent);
+    padding: 8px 16px;
+    font-size: 0.85em;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.btn-add-event:hover {
+    border-color: var(--sage-primary);
+    background: var(--bg-medium);
+    color: var(--sage-bright);
+}
+
+/* Responsive event rows */
+@media (max-width: 600px) {
+    .event-row {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .event-row input[type="time"] {
+        width: 90px;
+        font-size: 0.85em;
+    }
+
+    .event-row select {
+        min-width: 80px;
+        font-size: 0.85em;
+    }
+
+    .event-row .event-separator {
+        display: none;
+    }
+}
