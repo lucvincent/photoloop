@@ -330,7 +330,7 @@ class ClockRenderer:
         else:
             scales = self.SIZE_SCALES.get(ctx.size, self.SIZE_SCALES['medium'])
             font_size = int(ctx.screen_height * scales['weather'])
-        font = pygame.font.SysFont(None, font_size, italic=True)
+        font = pygame.font.SysFont(None, font_size)
 
         # Render weather text in a subtle gray
         weather_surface = font.render(self._weather_text, True, (160, 160, 160))
@@ -371,7 +371,7 @@ class ClockRenderer:
         if font_size != self._ticker_font_size or not self._ticker_widths:
             logger.info(f"Rebuilding ticker surfaces: font_size={font_size}, old={self._ticker_font_size}, headlines={len(self._ticker_headlines)}")
             self._ticker_font_size = font_size
-            font = pygame.font.SysFont(None, font_size)
+            font = pygame.font.SysFont(None, font_size, italic=True)
 
             # Pre-render and cache all headline surfaces
             # Truncate headlines that would exceed SDL2's 4096px texture limit
