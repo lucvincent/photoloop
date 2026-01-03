@@ -12,11 +12,12 @@
 # After editing, restart PhotoLoop: sudo systemctl restart photoloop
 #
 # This file is organized to match the dashboard tabs:
-#   1. Albums    - Photo sources (Google Photos, local folders)
-#   2. Display   - Slideshow appearance, scaling, overlays
-#   3. Screensaver - Schedule and display modes
-#   4. Clock     - Clock display, weather, news ticker
-#   5. Cache     - Photo storage settings
+#   1. Control   - Sync settings
+#   2. Albums    - Photo sources (Google Photos, local folders)
+#   3. Display   - Slideshow appearance, scaling, overlays
+#   4. Screensaver - Schedule and display modes
+#   5. Clock     - Clock display, weather, news ticker
+#   6. Cache     - Photo storage settings
 #
 # ============================================================
 
@@ -45,7 +46,41 @@ web:
 
 
 # ############################################################
-#                     1. ALBUMS
+#                     1. CONTROL
+# ############################################################
+# Sync settings for downloading photos from albums.
+
+# ------------------------------------------------------------
+# Sync Settings (Dashboard: Control tab)
+# ------------------------------------------------------------
+# How often to check for new photos in albums.
+#
+# interval_minutes: How often to sync (1440 = daily, 0 = disabled)
+# sync_time:        Time for first sync (24h format), then every interval
+# sync_on_start:    Sync immediately on service start
+# full_resolution:  Download original quality (recommended for 4K displays)
+# max_dimension:    Max size if full_resolution is false
+#
+# Sync behavior:
+# - If sync_time is set, first scheduled sync happens at that time
+# - sync_on_start is independent of sync_time
+# - Only enabled albums (marked "Show" in Albums tab) are synced
+#
+# Examples:
+# - Sync daily at 3am: sync_time: "03:00", interval_minutes: 1440
+# - Sync hourly starting at midnight: sync_time: "00:00", interval_minutes: 60
+# - Sync every 6 hours from service start: omit sync_time, interval_minutes: 360
+#
+sync:
+  interval_minutes: 1440
+  sync_time: "03:00"
+  sync_on_start: false
+  full_resolution: true
+  max_dimension: 1920
+
+
+# ############################################################
+#                     2. ALBUMS
 # ############################################################
 # Configure photo sources: Google Photos albums and local directories.
 
@@ -108,37 +143,8 @@ local_albums:
   browse_paths: ["/home", "/media", "/mnt"]
   show_photo_counts: true
 
-# ------------------------------------------------------------
-# Sync Settings
-# ------------------------------------------------------------
-# How often to check for new photos in albums.
-#
-# interval_minutes: How often to sync (1440 = daily, 0 = disabled)
-# sync_time:        Time for first sync (24h format), then every interval
-# sync_on_start:    Sync immediately on service start
-# full_resolution:  Download original quality (recommended for 4K displays)
-# max_dimension:    Max size if full_resolution is false
-#
-# Sync behavior:
-# - If sync_time is set, first scheduled sync happens at that time
-# - sync_on_start is independent of sync_time
-# - Only enabled albums (marked "Show" in Albums tab) are synced
-#
-# Examples:
-# - Sync daily at 3am: sync_time: "03:00", interval_minutes: 1440
-# - Sync hourly starting at midnight: sync_time: "00:00", interval_minutes: 60
-# - Sync every 6 hours from service start: omit sync_time, interval_minutes: 360
-#
-sync:
-  interval_minutes: 1440
-  sync_time: "03:00"
-  sync_on_start: false
-  full_resolution: true
-  max_dimension: 1920
-
-
 # ############################################################
-#                     2. DISPLAY
+#                     3. DISPLAY
 # ############################################################
 # Slideshow appearance: timing, transitions, scaling, overlays.
 
@@ -313,7 +319,7 @@ overlay:
 
 
 # ############################################################
-#                   3. SCREENSAVER
+#                   4. SCREENSAVER
 # ############################################################
 # Schedule when to show slideshow, clock, or turn off display.
 # The display can be in one of three modes:
@@ -390,7 +396,7 @@ schedule:
 
 
 # ############################################################
-#                      4. CLOCK
+#                      5. CLOCK
 # ############################################################
 # Clock display shown during scheduled off-hours or when stopped.
 # The clock can optionally show weather and scrolling news headlines.
@@ -475,7 +481,7 @@ news:
 
 
 # ############################################################
-#                      5. CACHE
+#                      6. CACHE
 # ############################################################
 # Photo storage and caching settings.
 
