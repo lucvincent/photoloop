@@ -232,15 +232,17 @@ class CacheManager:
                     # Check if resolution settings changed
                     cached_settings = data.get("settings", {})
                     current_max_dim = self.config.sync.max_dimension
-                    current_full_res = self.config.sync.full_resolution
                     cached_max_dim = cached_settings.get("max_dimension")
+                    # Handle legacy full_resolution setting
                     cached_full_res = cached_settings.get("full_resolution")
+                    if cached_full_res is not None and cached_max_dim is None:
+                        # Convert legacy: full_resolution=True -> max_dimension=0
+                        cached_max_dim = 0 if cached_full_res else 1920
 
-                    if (cached_max_dim is not None and
-                        (cached_max_dim != current_max_dim or cached_full_res != current_full_res)):
+                    if cached_max_dim is not None and cached_max_dim != current_max_dim:
                         logger.warning(
-                            f"Resolution settings changed (was: {cached_max_dim}px/full={cached_full_res}, "
-                            f"now: {current_max_dim}px/full={current_full_res}). "
+                            f"Resolution settings changed (was: {cached_max_dim}px, "
+                            f"now: {current_max_dim}px). "
                             f"Clearing cache to re-download at new resolution."
                         )
                         # Delete all cached files
@@ -330,7 +332,6 @@ class CacheManager:
                     "last_updated": datetime.now().isoformat(),
                     "settings": {
                         "max_dimension": self.config.sync.max_dimension,
-                        "full_resolution": self.config.sync.full_resolution,
                         "scaling": {
                             "mode": self.config.scaling.mode,
                             "max_crop_percent": self.config.scaling.max_crop_percent,
@@ -421,9 +422,11 @@ class CacheManager:
             download_url = self._scraper.get_video_download_url(url)
             extension = ".mp4"
         else:
-            if self.config.sync.full_resolution:
+            if self.config.sync.max_dimension == 0:
+                # Full resolution
                 download_url = self._scraper.get_full_resolution_url(url)
             else:
+                # Limited to max_dimension on longest edge
                 download_url = self._scraper.get_sized_url(
                     url,
                     self.config.sync.max_dimension,

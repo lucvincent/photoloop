@@ -58,8 +58,9 @@ web:
 # interval_minutes: How often to sync (1440 = daily, 0 = disabled)
 # sync_time:        Time for first sync (24h format), then every interval
 # sync_on_start:    Sync immediately on service start
-# full_resolution:  Download original quality (recommended for 4K displays)
-# max_dimension:    Max size if full_resolution is false
+# max_dimension:    Maximum image dimension (width or height) in pixels
+#                   0 = download original full resolution (recommended for 4K)
+#                   1920 = limit to 1920px on longest edge (saves bandwidth/storage)
 #
 # Sync behavior:
 # - If sync_time is set, first scheduled sync happens at that time
@@ -75,8 +76,7 @@ sync:
   interval_minutes: 1440
   sync_time: "03:00"
   sync_on_start: false
-  full_resolution: true
-  max_dimension: 1920
+  max_dimension: 0                     # 0 = full resolution, or max pixels (e.g., 1920)
 
 
 # ############################################################

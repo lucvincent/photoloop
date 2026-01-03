@@ -51,8 +51,7 @@ class SyncConfig:
     interval_minutes: int = 1440  # Default: 24 hours
     sync_on_start: bool = False  # Whether to sync immediately on service start
     sync_time: Optional[str] = None  # Time of day for first sync (HH:MM format, e.g., "03:00")
-    full_resolution: bool = True
-    max_dimension: int = 1920
+    max_dimension: int = 0  # 0 = full resolution, otherwise max width/height in pixels
     # Note: Caption priority is now configured in overlay.caption_sources at display time
 
 
