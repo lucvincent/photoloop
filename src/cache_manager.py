@@ -232,12 +232,18 @@ class CacheManager:
                     # Check if resolution settings changed
                     cached_settings = data.get("settings", {})
                     current_max_dim = self.config.sync.max_dimension
-                    cached_max_dim = cached_settings.get("max_dimension")
-                    # Handle legacy full_resolution setting
+
+                    # Handle legacy full_resolution setting - it takes precedence if present
+                    # Old format: full_resolution=True meant download at full res (equivalent to max_dimension=0)
+                    #             full_resolution=False meant use max_dimension value
+                    # New format: max_dimension=0 means full res, max_dimension=N means limit to N pixels
                     cached_full_res = cached_settings.get("full_resolution")
-                    if cached_full_res is not None and cached_max_dim is None:
-                        # Convert legacy: full_resolution=True -> max_dimension=0
-                        cached_max_dim = 0 if cached_full_res else 1920
+                    if cached_full_res is not None:
+                        # Legacy format: full_resolution determined actual behavior
+                        cached_max_dim = 0 if cached_full_res else cached_settings.get("max_dimension", 1920)
+                    else:
+                        # New format: use max_dimension directly
+                        cached_max_dim = cached_settings.get("max_dimension")
 
                     if cached_max_dim is not None and cached_max_dim != current_max_dim:
                         logger.warning(
