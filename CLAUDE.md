@@ -471,6 +471,60 @@ once per cycle, but recent photos tend to appear earlier in the shuffled order.
 2. Google Photos date (scraped from album)
 3. File modification time (fallback if no date metadata)
 
+### Weather and News Ticker (Jan 2026)
+
+The clock display can show weather and scrolling news headlines.
+
+**Weather display:**
+- Uses Open-Meteo API (free, no API key required)
+- Shows current temperature and conditions (sunny, cloudy, etc.)
+- Positioned below the clock, centered
+
+**News ticker:**
+- Fetches headlines from configurable RSS feeds
+- Continuously scrolling ticker at bottom of screen
+- Multiple headlines separated by middle dots (·)
+- Headlines automatically truncated if they exceed SDL2's 4096px texture width limit
+
+**Font size options:**
+Both weather and news support explicit `font_size` or auto-scaling:
+- `font_size: 0` - Auto-scale based on clock size setting (small/medium/large)
+- `font_size: 200` - Explicit size in pixels (recommended for large room viewing)
+
+Note: Pygame font sizes render at ~68% of specified height. For example, `font_size: 300`
+produces text approximately 200 pixels tall.
+
+**Auto-scale values (font_size: 0):**
+| Clock Size | Weather | News   | 4K Height |
+|------------|---------|--------|-----------|
+| small      | 3.5%    | 3.8%   | ~76/82px  |
+| medium     | 4.5%    | 4.8%   | ~97/104px |
+| large      | 5.5%    | 5.8%   | ~119/125px|
+
+**Config example:**
+```yaml
+weather:
+  enabled: true
+  latitude: 37.445099
+  longitude: -122.160362
+  units: fahrenheit
+  font_size: 225          # Explicit size for room viewing
+
+news:
+  enabled: true
+  feed_urls:
+    - https://feeds.npr.org/1001/rss.xml
+    - "# https://feeds.bbci.co.uk/news/rss.xml"  # Commented = disabled
+  scroll_speed: 180       # Pixels per second
+  max_headlines: 10
+  font_size: 175          # Explicit size for room viewing
+```
+
+**Key files:**
+- `src/clock/renderer.py`: Clock rendering with weather/news overlays
+- `src/clock/providers/weather.py`: Open-Meteo weather fetching
+- `src/clock/providers/news.py`: RSS headline fetching
+
 ## Development Notes
 
 ### Known Issues

@@ -277,13 +277,12 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="clock-size">Size</label>
+                    <label for="clock-size">Clock Size</label>
                     <select id="clock-size">
                         <option value="small" {% if config.clock.size == 'small' %}selected{% endif %}>Small</option>
                         <option value="medium" {% if config.clock.size == 'medium' %}selected{% endif %}>Medium</option>
                         <option value="large" {% if config.clock.size == 'large' %}selected{% endif %}>Large</option>
                     </select>
-                    <p class="help-text" style="margin-top: 4px;">Controls clock, weather, and news text size.</p>
                 </div>
 
                 <div class="form-group">
@@ -329,6 +328,12 @@
                             <option value="celsius" {% if config.weather.units == 'celsius' %}selected{% endif %}>Celsius</option>
                         </select>
                     </div>
+                    <div class="form-group">
+                        <label for="weather-font-size">Text Size</label>
+                        <input type="number" id="weather-font-size" min="0" max="400" step="10"
+                               value="{{ config.weather.font_size }}" placeholder="0 = auto">
+                        <p class="help-text" style="margin-top: 4px;">0 = auto-scale. Actual height is ~68% of this value. Try 200-300 for viewing from across the room.</p>
+                    </div>
                 </div>
 
                 <h4 style="margin-top: 20px; margin-bottom: 10px;">News Headlines (Optional)</h4>
@@ -342,15 +347,46 @@
 
                 <div id="news-settings" style="margin-left: 20px; {% if not config.news.enabled %}display: none;{% endif %}">
                     <div class="form-group">
-                        <label for="news-feeds">RSS Feed URLs (one per line)</label>
-                        <textarea id="news-feeds" rows="3" placeholder="https://feeds.bbci.co.uk/news/rss.xml"
-                                  style="width: 100%; font-family: inherit; font-size: 14px;">{{ config.news.feed_urls | join('\n') }}</textarea>
-                        <p class="help-text" style="margin-top: 4px;">Enter RSS feed URLs, one per line</p>
+                        <label for="news-feeds">RSS Feed URLs (one per line, # to disable)</label>
+                        <textarea id="news-feeds" rows="12"
+                                  placeholder="# Remove # to enable a feed&#10;https://feeds.bbci.co.uk/news/rss.xml&#10;# https://feeds.npr.org/1001/rss.xml&#10;# https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml">{{ config.news.feed_urls | join('\n') }}</textarea>
+                        <p class="help-text" style="margin-top: 4px;">Lines starting with # are disabled. Remove # to enable a feed.</p>
+                    </div>
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                        <div class="form-group" style="flex: 1; min-width: 150px;">
+                            <label for="news-refresh">Refresh Interval</label>
+                            <select id="news-refresh">
+                                <option value="1" {% if config.news.refresh_interval_minutes == 1 %}selected{% endif %}>1 minute</option>
+                                <option value="2" {% if config.news.refresh_interval_minutes == 2 %}selected{% endif %}>2 minutes</option>
+                                <option value="5" {% if config.news.refresh_interval_minutes == 5 %}selected{% endif %}>5 minutes</option>
+                                <option value="10" {% if config.news.refresh_interval_minutes == 10 %}selected{% endif %}>10 minutes</option>
+                                <option value="15" {% if config.news.refresh_interval_minutes == 15 %}selected{% endif %}>15 minutes</option>
+                                <option value="30" {% if config.news.refresh_interval_minutes == 30 %}selected{% endif %}>30 minutes</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 150px;">
+                            <label for="news-max-headlines">Max Headlines</label>
+                            <select id="news-max-headlines">
+                                <option value="5" {% if config.news.max_headlines == 5 %}selected{% endif %}>5</option>
+                                <option value="10" {% if config.news.max_headlines == 10 %}selected{% endif %}>10</option>
+                                <option value="15" {% if config.news.max_headlines == 15 %}selected{% endif %}>15</option>
+                                <option value="20" {% if config.news.max_headlines == 20 %}selected{% endif %}>20</option>
+                                <option value="30" {% if config.news.max_headlines == 30 %}selected{% endif %}>30</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="form-group">
-                        <label for="news-rotate">Headline Rotation (seconds)</label>
-                        <input type="number" id="news-rotate" min="3" max="60"
-                               value="{{ config.news.rotate_interval_seconds }}">
+                        <label for="news-scroll-speed">Scroll Speed: <span id="scroll-speed-value">{{ config.news.scroll_speed }}</span> px/s</label>
+                        <input type="range" id="news-scroll-speed" min="60" max="300" step="10"
+                               value="{{ config.news.scroll_speed }}"
+                               oninput="document.getElementById('scroll-speed-value').textContent = this.value">
+                        <p class="help-text" style="margin-top: 4px;">Faster = quicker scrolling (150-200 recommended)</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="news-font-size">Text Size</label>
+                        <input type="number" id="news-font-size" min="0" max="250" step="10"
+                               value="{{ config.news.font_size }}" placeholder="0 = auto">
+                        <p class="help-text" style="margin-top: 4px;">0 = auto-scale. Actual height is ~68% of value. Long headlines auto-truncate at large sizes.</p>
                     </div>
                 </div>
             </div>
@@ -1064,8 +1100,8 @@
         const scheduleInputs = [
             'weekday-start', 'weekday-end', 'weekend-start', 'weekend-end', 'off-hours-mode',
             'clock-style', 'clock-size', 'clock-show-date',
-            'weather-enabled', 'weather-city', 'weather-lat', 'weather-lon', 'weather-units',
-            'news-enabled', 'news-feeds', 'news-rotate'
+            'weather-enabled', 'weather-city', 'weather-lat', 'weather-lon', 'weather-units', 'weather-font-size',
+            'news-enabled', 'news-feeds', 'news-scroll-speed', 'news-refresh', 'news-max-headlines', 'news-font-size'
         ];
         const scheduleOriginalValues = {};
 
@@ -1156,10 +1192,14 @@
                     weather_latitude: document.getElementById('weather-lat').value || null,
                     weather_longitude: document.getElementById('weather-lon').value || null,
                     weather_units: document.getElementById('weather-units').value,
+                    weather_font_size: parseInt(document.getElementById('weather-font-size').value) || 0,
                     // News settings
                     news_enabled: document.getElementById('news-enabled').checked,
                     news_feed_urls: feedUrls,
-                    news_rotate_interval: parseInt(document.getElementById('news-rotate').value)
+                    news_scroll_speed: parseInt(document.getElementById('news-scroll-speed').value),
+                    news_refresh_interval: parseInt(document.getElementById('news-refresh').value),
+                    news_max_headlines: parseInt(document.getElementById('news-max-headlines').value),
+                    news_font_size: parseInt(document.getElementById('news-font-size').value) || 0
                 };
 
                 const result = await apiCall('/api/schedule', 'POST', data);

@@ -76,6 +76,20 @@ class ClockRenderer:
         self._weather_text: Optional[str] = None
         self._news_headline: Optional[str] = None
 
+        # News ticker state
+        self._ticker_headlines: list = []  # List of headline strings
+        self._ticker_widths: list = []  # Cached width of each headline
+        self._ticker_surfaces: list = []  # Cached rendered surfaces
+        self._ticker_separator = "   ·   "  # Separator between headlines (middle dot)
+        self._ticker_sep_width: int = 0  # Width of separator
+        self._ticker_sep_surface = None  # Cached separator surface
+        self._ticker_total_width: int = 0  # Total virtual width of all headlines + separators
+        self._ticker_offset: float = 0.0  # Scroll offset into virtual ticker
+        # Use config scroll speed if available, default 180 px/s
+        self._ticker_speed: float = float(news_config.scroll_speed) if news_config else 180.0
+        self._ticker_font_size: int = 0  # Cached font size
+        self._last_ticker_update: float = time.time()
+
         # Drift state
         self._drift_start_time = time.time()
 
@@ -123,17 +137,37 @@ class ClockRenderer:
         if weather_config:
             old_enabled = self._weather_config.enabled if self._weather_config else False
             self._weather_config = weather_config
+            logger.info(f"Weather config updated: enabled={weather_config.enabled}, font_size={weather_config.font_size}")
             if weather_config.enabled and not old_enabled:
                 self._weather_provider = None  # Force re-init
+                self._weather_text = None
+            elif not weather_config.enabled:
+                # Clear cached data when disabled
                 self._weather_text = None
 
         # Update news config - reinitialize provider if settings changed
         if news_config:
             old_enabled = self._news_config.enabled if self._news_config else False
+            old_font_size = self._news_config.font_size if self._news_config else 0
             self._news_config = news_config
+            logger.info(f"News config updated: enabled={news_config.enabled}, font_size={news_config.font_size}, old_font_size={old_font_size}")
+            # Update scroll speed from config
+            self._ticker_speed = float(news_config.scroll_speed)
+            # Invalidate cached surfaces if font size changed
+            if news_config.font_size != old_font_size:
+                logger.info(f"News font_size changed, invalidating cache")
+                self._ticker_surfaces = []
+                self._ticker_widths = []
+                self._ticker_font_size = 0  # Force recalculation
             if news_config.enabled and not old_enabled:
                 self._news_provider = None  # Force re-init
                 self._news_headline = None
+                self._ticker_headlines = []
+            elif not news_config.enabled:
+                # Clear cached data when disabled
+                self._news_headline = None
+                self._ticker_headlines = []
+                self._ticker_surfaces = []
 
         logger.info(f"Clock config updated: style={clock_config.style}, size={clock_config.size}")
 
@@ -190,20 +224,31 @@ class ClockRenderer:
             except Exception as e:
                 logger.debug(f"Weather update failed: {e}")
 
-        # Update news
+        # Update news ticker headlines
         if self._news_provider:
             try:
-                self._news_headline = self._news_provider.get_current_headline()
+                headlines = self._news_provider.get_all_headlines()
+                if headlines and headlines != self._ticker_headlines:
+                    self._ticker_headlines = headlines
+                    # Reset cached widths, surfaces, and offset - will be recalculated on render
+                    self._ticker_widths = []
+                    self._ticker_surfaces = []
+                    self._ticker_sep_surface = None
+                    self._ticker_total_width = 0
+                    self._ticker_offset = 0.0  # Reset scroll position for new content
             except Exception as e:
                 logger.debug(f"News update failed: {e}")
 
     # Size multipliers for weather and news text (relative to screen height)
     # These scale with the clock size setting
     SIZE_SCALES = {
-        'small': {'weather': 0.035, 'news': 0.028},
-        'medium': {'weather': 0.045, 'news': 0.035},
-        'large': {'weather': 0.055, 'news': 0.042},
+        'small': {'weather': 0.035, 'news': 0.038},
+        'medium': {'weather': 0.045, 'news': 0.048},
+        'large': {'weather': 0.055, 'news': 0.058},
     }
+
+    # News ticker separator
+    TICKER_SEPARATOR = "  •  "
 
     def render(self) -> None:
         """Render the clock display.
@@ -266,9 +311,9 @@ class ClockRenderer:
         if self._weather_text:
             self._render_weather(ctx, clock_bottom)
 
-        # Render news ticker at bottom of screen
-        if self._news_headline:
-            self._render_news(ctx)
+        # Render scrolling news ticker at bottom of screen
+        if self._ticker_headlines:
+            self._render_news_ticker(ctx)
 
         # Note: Caller is responsible for calling renderer.present()
 
@@ -279,9 +324,12 @@ class ClockRenderer:
             ctx: Render context with screen dimensions and settings.
             clock_bottom: Y coordinate of the bottom of the clock content.
         """
-        # Get size-scaled font (italic for visual differentiation)
-        scales = self.SIZE_SCALES.get(ctx.size, self.SIZE_SCALES['medium'])
-        font_size = int(ctx.screen_height * scales['weather'])
+        # Use explicit font size if configured, otherwise auto-scale
+        if self._weather_config and self._weather_config.font_size > 0:
+            font_size = self._weather_config.font_size
+        else:
+            scales = self.SIZE_SCALES.get(ctx.size, self.SIZE_SCALES['medium'])
+            font_size = int(ctx.screen_height * scales['weather'])
         font = pygame.font.SysFont(None, font_size, italic=True)
 
         # Render weather text in a subtle gray
@@ -296,27 +344,142 @@ class ClockRenderer:
             texture = self._surface_to_texture(weather_surface)
             texture.draw(dstrect=(x, y, weather_surface.get_width(), weather_surface.get_height()))
 
-    def _render_news(self, ctx: ClockRenderContext) -> None:
-        """Render news headline at bottom of screen, centered."""
-        # Get size-scaled font
-        scales = self.SIZE_SCALES.get(ctx.size, self.SIZE_SCALES['medium'])
-        font_size = int(ctx.screen_height * scales['news'])
-        font = pygame.font.SysFont(None, font_size)
+    def _render_news_ticker(self, ctx: ClockRenderContext) -> None:
+        """Render scrolling news ticker at bottom of screen.
 
-        # Render news in a subtle gray
-        news_surface = font.render(self._news_headline, True, (140, 140, 140))
+        Shows multiple headlines separated by middle dots, scrolling continuously.
+        Only renders headlines that are currently visible on screen.
+        """
+        if not self._ticker_headlines:
+            return
 
-        # Position centered at bottom with padding
-        padding = int(ctx.screen_height * 0.03)  # 3% from bottom
-        x = (ctx.screen_width - news_surface.get_width()) // 2 + ctx.offset_x
-        y = ctx.screen_height - news_surface.get_height() - padding + ctx.offset_y
+        # Safety: ensure widths match headlines count (guard against timing issues)
+        if self._ticker_widths and len(self._ticker_widths) != len(self._ticker_headlines):
+            self._ticker_widths = []  # Force recalculation
+            self._ticker_surfaces = []
+            self._ticker_sep_surface = None
+            self._ticker_total_width = 0
 
-        if self._surface_to_texture:
-            texture = self._surface_to_texture(news_surface)
-            texture.draw(dstrect=(x, y, news_surface.get_width(), news_surface.get_height()))
+        # Use explicit font size if configured, otherwise auto-scale
+        if self._news_config and self._news_config.font_size > 0:
+            font_size = self._news_config.font_size
+        else:
+            scales = self.SIZE_SCALES.get(ctx.size, self.SIZE_SCALES['medium'])
+            font_size = int(ctx.screen_height * scales['news'])
+
+        # Check if we need to recalculate widths and cache surfaces
+        if font_size != self._ticker_font_size or not self._ticker_widths:
+            logger.info(f"Rebuilding ticker surfaces: font_size={font_size}, old={self._ticker_font_size}, headlines={len(self._ticker_headlines)}")
+            self._ticker_font_size = font_size
+            font = pygame.font.SysFont(None, font_size)
+
+            # Pre-render and cache all headline surfaces
+            # Truncate headlines that would exceed SDL2's 4096px texture limit
+            max_width = 4000  # Leave some margin below 4096
+            self._ticker_widths = []
+            self._ticker_surfaces = []
+            for headline in self._ticker_headlines:
+                # Try rendering, truncate if too wide
+                truncated = headline
+                surface = font.render(truncated, True, (160, 160, 160))
+                original_width = surface.get_width()
+                while surface.get_width() > max_width and len(truncated) > 10:
+                    truncated = truncated[:-4] + "..."
+                    surface = font.render(truncated, True, (160, 160, 160))
+                if truncated != headline:
+                    logger.debug(f"Headline truncated: {original_width}px -> {surface.get_width()}px")
+                self._ticker_widths.append(surface.get_width())
+                self._ticker_surfaces.append(surface)
+
+            # Pre-render separator
+            self._ticker_sep_surface = font.render(self._ticker_separator, True, (100, 100, 100))
+            self._ticker_sep_width = self._ticker_sep_surface.get_width()
+
+            # Calculate total virtual width (all headlines + separators)
+            self._ticker_total_width = sum(self._ticker_widths) + self._ticker_sep_width * len(self._ticker_headlines)
+
+        # Calculate time delta and update scroll offset
+        now = time.time()
+        delta = now - self._last_ticker_update
+        self._last_ticker_update = now
+
+        # Clamp delta to avoid jumps after pause/lag (max 100ms worth of movement)
+        delta = min(delta, 0.1)
+
+        # Move ticker left (offset grows continuously)
+        self._ticker_offset += self._ticker_speed * delta
+
+        # Position at bottom with padding
+        padding = int(ctx.screen_height * 0.025)
+        y = ctx.screen_height - font_size - padding + ctx.offset_y
+
+        # The ticker is a repeating pattern of width = total_width
+        # We need to figure out which "copy" of the pattern to start rendering from
+        # based on the current offset, and render enough copies to fill the screen
+
+        if self._ticker_total_width <= 0:
+            return
+
+        # Calculate the first copy that could possibly have visible content
+        # A copy is visible if its right edge (copy_start_x + total_width) > 0
+        # Solve: screen_width - offset + i * total_width + total_width > 0
+        # i > (offset - screen_width - total_width) / total_width
+        first_copy = max(0, int((self._ticker_offset - ctx.screen_width) / self._ticker_total_width))
+
+        # Render enough copies to definitely cover the screen plus buffer
+        num_copies = int(ctx.screen_width / self._ticker_total_width) + 3
+
+        # Render ticker copies
+        num_headlines = len(self._ticker_headlines)
+        for copy_idx in range(first_copy, first_copy + num_copies):
+            copy_start_x = ctx.screen_width - self._ticker_offset + copy_idx * self._ticker_total_width
+
+            # Skip this copy if completely off-screen right (not yet visible)
+            if copy_start_x > ctx.screen_width:
+                continue
+            # Skip if completely off-screen left (already scrolled past)
+            if copy_start_x + self._ticker_total_width < 0:
+                continue
+
+            virtual_pos = 0
+            for i in range(num_headlines):
+                headline_width = self._ticker_widths[i]
+
+                # Calculate screen X position for this headline
+                screen_x = copy_start_x + virtual_pos + ctx.offset_x
+
+                # Render if any part is visible (right edge > 0 AND left edge < screen width)
+                if screen_x + headline_width > 0 and screen_x < ctx.screen_width:
+                    if self._surface_to_texture and i < len(self._ticker_surfaces):
+                        texture = self._surface_to_texture(self._ticker_surfaces[i])
+                        texture.draw(dstrect=(int(screen_x), y, headline_width, self._ticker_surfaces[i].get_height()))
+
+                virtual_pos += headline_width
+
+                # Render separator after headline
+                sep_screen_x = copy_start_x + virtual_pos + ctx.offset_x
+                if sep_screen_x + self._ticker_sep_width > 0 and sep_screen_x < ctx.screen_width:
+                    if self._surface_to_texture and self._ticker_sep_surface:
+                        texture = self._surface_to_texture(self._ticker_sep_surface)
+                        texture.draw(dstrect=(int(sep_screen_x), y, self._ticker_sep_width, self._ticker_sep_surface.get_height()))
+
+                virtual_pos += self._ticker_sep_width
+
+        # Prevent offset from growing too large (wrap at a safe boundary)
+        # This maintains visual continuity while preventing float overflow
+        if self._ticker_offset > self._ticker_total_width * 1000:
+            self._ticker_offset = self._ticker_offset % self._ticker_total_width
 
     def get_update_interval_ms(self) -> int:
-        """Get the recommended update interval for current style."""
+        """Get the recommended update interval for current style.
+
+        Returns faster interval when news ticker is active for smooth scrolling.
+        """
+        # News ticker needs fast updates for smooth animation (~60fps)
+        if self._ticker_headlines:
+            return 16  # ~60fps for smooth ticker
+
+        # Otherwise use style's interval (100ms for seconds, 1000ms otherwise)
         if self._style:
             return self._style.get_update_interval_ms()
         return 1000

@@ -584,6 +584,8 @@ def create_app(
                     weather_updates['longitude'] = float(lon) if lon else None
                 if 'weather_units' in data:
                     weather_updates['units'] = data['weather_units']
+                if 'weather_font_size' in data:
+                    weather_updates['font_size'] = int(data['weather_font_size'])
                 if weather_updates:
                     updates['weather'] = weather_updates
 
@@ -593,8 +595,14 @@ def create_app(
                     news_updates['enabled'] = bool(data['news_enabled'])
                 if 'news_feed_urls' in data:
                     news_updates['feed_urls'] = data['news_feed_urls']
-                if 'news_rotate_interval' in data:
-                    news_updates['rotate_interval_seconds'] = int(data['news_rotate_interval'])
+                if 'news_scroll_speed' in data:
+                    news_updates['scroll_speed'] = int(data['news_scroll_speed'])
+                if 'news_refresh_interval' in data:
+                    news_updates['refresh_interval_minutes'] = int(data['news_refresh_interval'])
+                if 'news_max_headlines' in data:
+                    news_updates['max_headlines'] = int(data['news_max_headlines'])
+                if 'news_font_size' in data:
+                    news_updates['font_size'] = int(data['news_font_size'])
                 if news_updates:
                     updates['news'] = news_updates
 

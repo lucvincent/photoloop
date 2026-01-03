@@ -498,45 +498,81 @@ weather:
   # Weather doesn't change quickly, so 30-60 minutes is usually sufficient
   update_interval_minutes: 30
 
+  # Text size for weather display (in pixels)
+  # 0 = auto-scale based on clock size setting (recommended for most setups)
+  #
+  # For viewing from across the room, try larger values:
+  #   - 200-250: Readable from ~10-15 feet / 3-5 meters
+  #   - 300-350: Readable from ~15-20 feet / 5-6 meters
+  #
+  # Note: Pygame font sizes render at ~68% of specified height
+  # (e.g., font_size: 300 produces text ~200 pixels tall)
+  #
+  # Auto-scale values (when font_size: 0):
+  #   - Small clock:  ~3.5% of screen height (~76px on 4K)
+  #   - Medium clock: ~4.5% of screen height (~97px on 4K)
+  #   - Large clock:  ~5.5% of screen height (~119px on 4K)
+  font_size: 0
+
 # ------------------------------------------------------------
 # News Headlines - Optional news ticker on clock screen
 # ------------------------------------------------------------
-# Shows rotating news headlines from RSS feeds on the clock display.
+# Shows scrolling news headlines from RSS feeds on the clock display.
+# Lines starting with # are disabled - remove # to enable a feed.
 news:
-  # Enable/disable news headlines
   enabled: false
 
-  # RSS feed URLs to fetch headlines from
-  # Most news sites provide RSS feeds. Common examples:
-  #
-  # General News:
-  #   - "https://feeds.bbci.co.uk/news/rss.xml"           # BBC News
-  #   - "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"  # NY Times
-  #   - "https://feeds.npr.org/1001/rss.xml"              # NPR News
-  #   - "https://www.theguardian.com/world/rss"           # The Guardian
-  #
-  # Technology:
-  #   - "https://feeds.arstechnica.com/arstechnica/index" # Ars Technica
-  #   - "https://www.wired.com/feed/rss"                  # Wired
-  #   - "https://techcrunch.com/feed/"                    # TechCrunch
-  #
-  # To find RSS feeds for other sites:
-  #   1. Look for RSS/feed icon on the website
-  #   2. Search "[site name] RSS feed"
-  #   3. Try adding /rss or /feed to the site URL
-  #
-  # Format: List of URLs, one per line with leading dash
-  feed_urls: []
-  # Example with feeds:
-  # feed_urls:
-  #   - "https://feeds.bbci.co.uk/news/rss.xml"
-  #   - "https://feeds.npr.org/1001/rss.xml"
+  # RSS feed URLs - lines starting with # are ignored (disabled)
+  # Remove the # at the start of a line to enable that feed
+  feed_urls:
+  # === General News ===
+  - "# https://feeds.bbci.co.uk/news/rss.xml"
+  - "# https://feeds.npr.org/1001/rss.xml"
+  - "# https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"
+  - "# https://www.theguardian.com/world/rss"
+  - "# https://feeds.reuters.com/reuters/topNews"
+  - "# https://feeds.washingtonpost.com/rss/world"
+  - "# https://rss.cnn.com/rss/edition.rss"
+  # === Technology ===
+  - "# https://feeds.arstechnica.com/arstechnica/index"
+  - "# https://www.wired.com/feed/rss"
+  - "# https://techcrunch.com/feed/"
+  - "# https://www.theverge.com/rss/index.xml"
+  # === Business ===
+  - "# https://feeds.bloomberg.com/markets/news.rss"
+  - "# https://www.ft.com/rss/home"
+  # === Science ===
+  - "# https://www.sciencedaily.com/rss/all.xml"
+  - "# https://www.nasa.gov/rss/dyn/breaking_news.rss"
 
-  # How long to show each headline before rotating (in seconds)
-  rotate_interval_seconds: 10
+  # How often to fetch new headlines (minutes)
+  refresh_interval_minutes: 5
 
-  # Maximum number of headlines to keep in rotation
-  max_headlines: 5
+  # Maximum headlines to display
+  max_headlines: 10
+
+  # Scrolling speed in pixels per second (higher = faster)
+  # 100-150: Slow, easy to read
+  # 150-200: Moderate (recommended)
+  # 200-300: Fast scrolling
+  scroll_speed: 180
+
+  # Text size for news ticker (in pixels)
+  # 0 = auto-scale based on clock size setting (recommended for most setups)
+  #
+  # For viewing from across the room, try larger values:
+  #   - 150-200: Readable from ~10-15 feet / 3-5 meters
+  #   - 200-250: Readable from ~15-20 feet / 5-6 meters
+  #
+  # Note: Pygame font sizes render at ~68% of specified height
+  # Very long headlines are automatically truncated with "..." to fit
+  # within SDL2's 4096px texture width limit.
+  #
+  # Auto-scale values (when font_size: 0):
+  #   - Small clock:  ~3.8% of screen height (~82px on 4K)
+  #   - Medium clock: ~4.8% of screen height (~104px on 4K)
+  #   - Large clock:  ~5.8% of screen height (~125px on 4K)
+  font_size: 0
 
 # ============================================================
 # Quick Start Guide

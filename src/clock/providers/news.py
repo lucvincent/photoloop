@@ -23,8 +23,6 @@ logger = logging.getLogger(__name__)
 class NewsProvider:
     """Fetches news headlines from RSS feeds with rotation."""
 
-    DEFAULT_UPDATE_INTERVAL = 15 * 60  # 15 minutes
-
     def __init__(self, config: 'NewsConfig'):
         """Initialize the news provider.
 
@@ -33,14 +31,23 @@ class NewsProvider:
         """
         self._config = config
         self._headlines: List[str] = []
-        self._current_index = 0
         self._cache_time: float = 0
-        self._last_rotation: float = 0
         self._lock = threading.Lock()
 
-        # Start background update thread if we have feeds
-        if config.feed_urls:
+        # Get active feeds (filter out commented lines starting with #)
+        active_feeds = self._get_active_feeds()
+
+        # Start background update thread if we have active feeds
+        if active_feeds:
+            logger.info(f"News provider starting with {len(active_feeds)} active feed(s)")
             self._start_background_updates()
+        else:
+            logger.info("News provider initialized but no active feeds configured")
+
+    def _get_active_feeds(self) -> List[str]:
+        """Get list of active feed URLs (excluding commented lines)."""
+        return [url for url in self._config.feed_urls
+                if url and not url.strip().startswith('#')]
 
     def _start_background_updates(self) -> None:
         """Start background thread for news updates."""
@@ -49,12 +56,14 @@ class NewsProvider:
 
     def _background_update_loop(self) -> None:
         """Background loop to fetch news headlines."""
+        # Use configured refresh interval (default 5 minutes)
+        interval_seconds = getattr(self._config, 'refresh_interval_minutes', 5) * 60
         while True:
             try:
                 self._fetch_headlines()
             except Exception as e:
                 logger.debug(f"Background news fetch failed: {e}")
-            time.sleep(self.DEFAULT_UPDATE_INTERVAL)
+            time.sleep(interval_seconds)
 
     def _fetch_headlines(self) -> None:
         """Fetch headlines from all configured RSS feeds."""
@@ -62,12 +71,13 @@ class NewsProvider:
             logger.warning("requests library not available for news")
             return
 
-        if not self._config.feed_urls:
+        active_feeds = self._get_active_feeds()
+        if not active_feeds:
             return
 
         all_headlines = []
 
-        for feed_url in self._config.feed_urls:
+        for feed_url in active_feeds:
             try:
                 headlines = self._parse_feed(feed_url)
                 all_headlines.extend(headlines)
@@ -79,8 +89,7 @@ class NewsProvider:
                 # Limit to max headlines
                 self._headlines = all_headlines[:self._config.max_headlines]
                 self._cache_time = time.time()
-                self._current_index = 0
-                logger.debug(f"Fetched {len(self._headlines)} headlines")
+                logger.info(f"News: fetched {len(self._headlines)} headlines from {len(active_feeds)} feed(s)")
 
     def _parse_feed(self, feed_url: str) -> List[str]:
         """Parse an RSS feed and extract headlines.
@@ -147,29 +156,19 @@ class NewsProvider:
         return text
 
     def get_current_headline(self) -> Optional[str]:
-        """Get the current headline for display.
-
-        Automatically rotates to the next headline after the configured interval.
+        """Get the first headline for display (deprecated - use get_all_headlines for ticker).
 
         Returns:
-            Current headline string or None if no headlines.
+            First headline string or None if no headlines.
         """
         # Fetch if cache is empty
         if not self._headlines and self._config.feed_urls:
             self._fetch_headlines()
 
-        now = time.time()
-
         with self._lock:
             if not self._headlines:
                 return None
-
-            # Rotate to next headline if interval has passed
-            if now - self._last_rotation > self._config.rotate_interval_seconds:
-                self._current_index = (self._current_index + 1) % len(self._headlines)
-                self._last_rotation = now
-
-            return self._headlines[self._current_index]
+            return self._headlines[0]
 
     def get_all_headlines(self) -> List[str]:
         """Get all cached headlines."""

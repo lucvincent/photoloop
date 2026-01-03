@@ -234,18 +234,24 @@ class WeatherConfig:
     units: str = "fahrenheit"
     # How often to fetch weather data (minutes)
     update_interval_minutes: int = 30
+    # Font size in pixels (0 = auto-scale based on screen)
+    font_size: int = 0
 
 
 @dataclass
 class NewsConfig:
     """News headlines settings for clock mode."""
     enabled: bool = False
-    # RSS feed URLs to fetch headlines from
+    # RSS feed URLs to fetch headlines from (lines starting with # are ignored)
     feed_urls: List[str] = field(default_factory=list)
-    # Maximum number of headlines to cache
-    max_headlines: int = 5
-    # How often to rotate to next headline (seconds)
-    rotate_interval_seconds: int = 10
+    # Maximum number of headlines to display
+    max_headlines: int = 10
+    # Scrolling speed in pixels per second (higher = faster)
+    scroll_speed: int = 180
+    # How often to refresh headlines from feeds (minutes)
+    refresh_interval_minutes: int = 5
+    # Font size in pixels (0 = auto-scale based on screen)
+    font_size: int = 0
 
 
 @dataclass
@@ -656,7 +662,7 @@ def validate_config(config: PhotoLoopConfig) -> List[str]:
     if config.news.max_headlines < 1:
         errors.append("News max_headlines must be at least 1")
 
-    if config.news.rotate_interval_seconds < 3:
-        errors.append("News rotate_interval_seconds must be at least 3")
+    if config.news.scroll_speed < 10:
+        errors.append("News scroll_speed must be at least 10")
 
     return errors

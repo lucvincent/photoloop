@@ -684,7 +684,12 @@ class Display:
         elif self.mode == DisplayMode.CLOCK:
             self._render_clock()
             self._renderer.present()
-            time.sleep(1.0)
+            # Use faster updates for smooth ticker animation
+            if self._clock_renderer:
+                interval_ms = self._clock_renderer.get_update_interval_ms()
+                time.sleep(interval_ms / 1000.0)
+            else:
+                time.sleep(0.1)
 
         elif self.mode == DisplayMode.SLIDESHOW:
             if self._transitioning:

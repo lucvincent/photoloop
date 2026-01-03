@@ -234,7 +234,8 @@ input[type="text"],
 input[type="url"],
 input[type="number"],
 input[type="time"],
-select {
+select,
+textarea {
     width: 100%;
     padding: 10px 12px;
     background: var(--bg-dark);
@@ -243,10 +244,19 @@ select {
     color: var(--text-primary);
     font-size: 1em;
     transition: border-color 0.2s, box-shadow 0.2s;
+    box-sizing: border-box;
+}
+
+textarea {
+    resize: vertical;
+    min-height: 80px;
+    line-height: 1.5;
+    font-family: inherit;
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
     outline: none;
     border-color: var(--sage-primary);
     box-shadow: 0 0 0 3px rgba(122, 153, 104, 0.2);
