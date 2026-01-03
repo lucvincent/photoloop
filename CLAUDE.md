@@ -527,6 +527,23 @@ news:
 
 ## Development Notes
 
+### CRITICAL: Avoid Triggering Unnecessary Syncs
+
+**Syncing is SLOW and resource-intensive.** A full sync of multiple albums can take 30+ minutes.
+The scraper uses headless Chrome which is memory-hungry and can OOM on large albums.
+
+**NEVER make changes that could trigger cache invalidation without explicit user approval.**
+
+Cache invalidation happens when metadata.json detects changes to:
+- `sync.max_dimension` (resolution settings)
+- `scaling.*` settings that affect crop regions
+
+Before modifying any sync/resolution settings:
+1. Understand how the change affects cache validation in `cache_manager.py`
+2. Test migration logic with a copy of existing metadata
+3. WARN the user if there's any risk of cache wipe
+4. Get explicit approval before deploying
+
 ### Known Issues
 - Album scraper can OOM on very large albums (needs batching/streaming)
 - Chrome memory usage accumulates during long scroll sessions
