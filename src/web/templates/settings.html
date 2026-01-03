@@ -39,6 +39,7 @@
             <button class="tab" data-tab="albums">Albums</button>
             <button class="tab" data-tab="display">Display</button>
             <button class="tab" data-tab="schedule">Schedule</button>
+            <button class="tab" data-tab="clock">Clock</button>
             <button class="tab" data-tab="cache">Cache</button>
         </nav>
 
@@ -256,142 +257,147 @@
                     <option value="black" {% if config.schedule.off_hours_mode == 'black' %}selected{% endif %}>Black Screen</option>
                     <option value="clock" {% if config.schedule.off_hours_mode == 'clock' %}selected{% endif %}>Clock</option>
                 </select>
-            </div>
-
-            <!-- Clock Settings (shown when off-hours mode is "clock") -->
-            <div id="clock-settings" style="margin-top: 20px; padding: 15px; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border); {% if config.schedule.off_hours_mode != 'clock' %}display: none;{% endif %}">
-                <h3 style="margin-top: 0;">Clock Settings</h3>
-
-                <div class="form-group">
-                    <label for="clock-style">Clock Style</label>
-                    <select id="clock-style">
-                        <option value="digital_24h" {% if config.clock.style == 'digital_24h' %}selected{% endif %}>Digital 24-Hour</option>
-                        <option value="digital_12h" {% if config.clock.style == 'digital_12h' %}selected{% endif %}>Digital 12-Hour</option>
-                        <option value="digital_seconds" {% if config.clock.style == 'digital_seconds' %}selected{% endif %}>Digital with Seconds</option>
-                        <option value="digital_large" {% if config.clock.style == 'digital_large' %}selected{% endif %}>Digital Large</option>
-                        <option value="analog_classic" {% if config.clock.style == 'analog_classic' %}selected{% endif %}>Analog Classic</option>
-                        <option value="analog_modern" {% if config.clock.style == 'analog_modern' %}selected{% endif %}>Analog Modern</option>
-                        <option value="minimal_time" {% if config.clock.style == 'minimal_time' %}selected{% endif %}>Minimal Time</option>
-                        <option value="minimal_date" {% if config.clock.style == 'minimal_date' %}selected{% endif %}>Minimal Date</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="clock-size">Clock Size</label>
-                    <select id="clock-size">
-                        <option value="small" {% if config.clock.size == 'small' %}selected{% endif %}>Small</option>
-                        <option value="medium" {% if config.clock.size == 'medium' %}selected{% endif %}>Medium</option>
-                        <option value="large" {% if config.clock.size == 'large' %}selected{% endif %}>Large</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="clock-show-date"
-                               {% if config.clock.show_date %}checked{% endif %}>
-                        Show Date
-                    </label>
-                </div>
-
-                <h4 style="margin-top: 20px; margin-bottom: 10px;">Weather (Optional)</h4>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="weather-enabled"
-                               {% if config.weather.enabled %}checked{% endif %}>
-                        Show Weather
-                    </label>
-                </div>
-
-                <div id="weather-settings" style="margin-left: 20px; {% if not config.weather.enabled %}display: none;{% endif %}">
-                    <div class="form-group">
-                        <label for="weather-city">City Name (for display)</label>
-                        <input type="text" id="weather-city" placeholder="e.g., San Francisco"
-                               value="{{ config.weather.city_name }}">
-                    </div>
-                    <div class="time-range">
-                        <div class="form-group">
-                            <label for="weather-lat">Latitude</label>
-                            <input type="number" id="weather-lat" step="0.0001" placeholder="37.7749"
-                                   value="{{ config.weather.latitude if config.weather.latitude else '' }}">
-                        </div>
-                        <div class="form-group">
-                            <label for="weather-lon">Longitude</label>
-                            <input type="number" id="weather-lon" step="0.0001" placeholder="-122.4194"
-                                   value="{{ config.weather.longitude if config.weather.longitude else '' }}">
-                        </div>
-                    </div>
-                    <p class="help-text" style="margin-top: 4px;">Find coordinates at <a href="https://www.latlong.net/" target="_blank" style="color: var(--sage-primary);">latlong.net</a></p>
-                    <div class="form-group">
-                        <label for="weather-units">Temperature Units</label>
-                        <select id="weather-units">
-                            <option value="fahrenheit" {% if config.weather.units == 'fahrenheit' %}selected{% endif %}>Fahrenheit</option>
-                            <option value="celsius" {% if config.weather.units == 'celsius' %}selected{% endif %}>Celsius</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="weather-font-size">Text Size</label>
-                        <input type="number" id="weather-font-size" min="0" max="400" step="10"
-                               value="{{ config.weather.font_size }}" placeholder="0 = auto">
-                        <p class="help-text" style="margin-top: 4px;">0 = auto-scale. Actual height is ~68% of this value. Try 200-300 for viewing from across the room.</p>
-                    </div>
-                </div>
-
-                <h4 style="margin-top: 20px; margin-bottom: 10px;">News Headlines (Optional)</h4>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="news-enabled"
-                               {% if config.news.enabled %}checked{% endif %}>
-                        Show News Headlines
-                    </label>
-                </div>
-
-                <div id="news-settings" style="margin-left: 20px; {% if not config.news.enabled %}display: none;{% endif %}">
-                    <div class="form-group">
-                        <label for="news-feeds">RSS Feed URLs (one per line, # to disable)</label>
-                        <textarea id="news-feeds" rows="12"
-                                  placeholder="# Remove # to enable a feed&#10;https://feeds.bbci.co.uk/news/rss.xml&#10;# https://feeds.npr.org/1001/rss.xml&#10;# https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml">{{ config.news.feed_urls | join('\n') }}</textarea>
-                        <p class="help-text" style="margin-top: 4px;">Lines starting with # are disabled. Remove # to enable a feed.</p>
-                    </div>
-                    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                        <div class="form-group" style="flex: 1; min-width: 150px;">
-                            <label for="news-refresh">Refresh Interval</label>
-                            <select id="news-refresh">
-                                <option value="1" {% if config.news.refresh_interval_minutes == 1 %}selected{% endif %}>1 minute</option>
-                                <option value="2" {% if config.news.refresh_interval_minutes == 2 %}selected{% endif %}>2 minutes</option>
-                                <option value="5" {% if config.news.refresh_interval_minutes == 5 %}selected{% endif %}>5 minutes</option>
-                                <option value="10" {% if config.news.refresh_interval_minutes == 10 %}selected{% endif %}>10 minutes</option>
-                                <option value="15" {% if config.news.refresh_interval_minutes == 15 %}selected{% endif %}>15 minutes</option>
-                                <option value="30" {% if config.news.refresh_interval_minutes == 30 %}selected{% endif %}>30 minutes</option>
-                            </select>
-                        </div>
-                        <div class="form-group" style="flex: 1; min-width: 150px;">
-                            <label for="news-max-headlines">Max Headlines</label>
-                            <select id="news-max-headlines">
-                                <option value="5" {% if config.news.max_headlines == 5 %}selected{% endif %}>5</option>
-                                <option value="10" {% if config.news.max_headlines == 10 %}selected{% endif %}>10</option>
-                                <option value="15" {% if config.news.max_headlines == 15 %}selected{% endif %}>15</option>
-                                <option value="20" {% if config.news.max_headlines == 20 %}selected{% endif %}>20</option>
-                                <option value="30" {% if config.news.max_headlines == 30 %}selected{% endif %}>30</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="news-scroll-speed">Scroll Speed: <span id="scroll-speed-value">{{ config.news.scroll_speed }}</span> px/s</label>
-                        <input type="range" id="news-scroll-speed" min="60" max="300" step="10"
-                               value="{{ config.news.scroll_speed }}"
-                               oninput="document.getElementById('scroll-speed-value').textContent = this.value">
-                        <p class="help-text" style="margin-top: 4px;">Faster = quicker scrolling (150-200 recommended)</p>
-                    </div>
-                    <div class="form-group">
-                        <label for="news-font-size">Text Size</label>
-                        <input type="number" id="news-font-size" min="0" max="250" step="10"
-                               value="{{ config.news.font_size }}" placeholder="0 = auto">
-                        <p class="help-text" style="margin-top: 4px;">0 = auto-scale. Actual height is ~68% of value. Long headlines auto-truncate at large sizes.</p>
-                    </div>
-                </div>
+                <p class="help-text" style="margin-top: 4px;">Configure clock appearance in the Clock tab.</p>
             </div>
 
             <button id="btn-save-schedule" class="btn btn-primary" style="margin-top: 20px;">Save</button>
+        </section>
+
+        <!-- Clock Tab -->
+        <section id="clock" class="tab-content">
+            <h2>Clock Display</h2>
+            <p class="hint">Settings for the clock shown during off-hours (when "Clock" is selected in Schedule).</p>
+
+            <h3>Clock Appearance</h3>
+            <div class="form-group">
+                <label for="clock-style">Clock Style</label>
+                <select id="clock-style">
+                    <option value="digital_24h" {% if config.clock.style == 'digital_24h' %}selected{% endif %}>Digital 24-Hour</option>
+                    <option value="digital_12h" {% if config.clock.style == 'digital_12h' %}selected{% endif %}>Digital 12-Hour</option>
+                    <option value="digital_seconds" {% if config.clock.style == 'digital_seconds' %}selected{% endif %}>Digital with Seconds</option>
+                    <option value="digital_large" {% if config.clock.style == 'digital_large' %}selected{% endif %}>Digital Large</option>
+                    <option value="analog_classic" {% if config.clock.style == 'analog_classic' %}selected{% endif %}>Analog Classic</option>
+                    <option value="analog_modern" {% if config.clock.style == 'analog_modern' %}selected{% endif %}>Analog Modern</option>
+                    <option value="minimal_time" {% if config.clock.style == 'minimal_time' %}selected{% endif %}>Minimal Time</option>
+                    <option value="minimal_date" {% if config.clock.style == 'minimal_date' %}selected{% endif %}>Minimal Date</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="clock-size">Clock Size</label>
+                <select id="clock-size">
+                    <option value="small" {% if config.clock.size == 'small' %}selected{% endif %}>Small</option>
+                    <option value="medium" {% if config.clock.size == 'medium' %}selected{% endif %}>Medium</option>
+                    <option value="large" {% if config.clock.size == 'large' %}selected{% endif %}>Large</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="clock-show-date"
+                           {% if config.clock.show_date %}checked{% endif %}>
+                    Show Date
+                </label>
+            </div>
+
+            <h3 style="margin-top: 25px;">Weather (Optional)</h3>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="weather-enabled"
+                           {% if config.weather.enabled %}checked{% endif %}>
+                    Show Weather
+                </label>
+            </div>
+
+            <div id="weather-settings" style="margin-left: 20px; {% if not config.weather.enabled %}display: none;{% endif %}">
+                <div class="form-group">
+                    <label for="weather-city">City Name (for display)</label>
+                    <input type="text" id="weather-city" placeholder="e.g., San Francisco"
+                           value="{{ config.weather.city_name }}">
+                </div>
+                <div class="time-range">
+                    <div class="form-group">
+                        <label for="weather-lat">Latitude</label>
+                        <input type="number" id="weather-lat" step="0.0001" placeholder="37.7749"
+                               value="{{ config.weather.latitude if config.weather.latitude else '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="weather-lon">Longitude</label>
+                        <input type="number" id="weather-lon" step="0.0001" placeholder="-122.4194"
+                               value="{{ config.weather.longitude if config.weather.longitude else '' }}">
+                    </div>
+                </div>
+                <p class="help-text" style="margin-top: 4px;">Find coordinates at <a href="https://www.latlong.net/" target="_blank" style="color: var(--sage-primary);">latlong.net</a></p>
+                <div class="form-group">
+                    <label for="weather-units">Temperature Units</label>
+                    <select id="weather-units">
+                        <option value="fahrenheit" {% if config.weather.units == 'fahrenheit' %}selected{% endif %}>Fahrenheit</option>
+                        <option value="celsius" {% if config.weather.units == 'celsius' %}selected{% endif %}>Celsius</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="weather-font-size">Text Size</label>
+                    <input type="number" id="weather-font-size" min="0" max="400" step="10"
+                           value="{{ config.weather.font_size }}" placeholder="0 = auto">
+                    <p class="help-text" style="margin-top: 4px;">0 = auto-scale. Actual height is ~68% of this value. Try 200-300 for viewing from across the room.</p>
+                </div>
+            </div>
+
+            <h3 style="margin-top: 25px;">News Headlines (Optional)</h3>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="news-enabled"
+                           {% if config.news.enabled %}checked{% endif %}>
+                    Show News Headlines
+                </label>
+            </div>
+
+            <div id="news-settings" style="margin-left: 20px; {% if not config.news.enabled %}display: none;{% endif %}">
+                <div class="form-group">
+                    <label for="news-feeds">RSS Feed URLs (one per line, # to disable)</label>
+                    <textarea id="news-feeds" rows="12"
+                              placeholder="# Remove # to enable a feed&#10;https://feeds.bbci.co.uk/news/rss.xml&#10;# https://feeds.npr.org/1001/rss.xml&#10;# https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml">{{ config.news.feed_urls | join('\n') }}</textarea>
+                    <p class="help-text" style="margin-top: 4px;">Lines starting with # are disabled. Remove # to enable a feed.</p>
+                </div>
+                <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <div class="form-group" style="flex: 1; min-width: 150px;">
+                        <label for="news-refresh">Refresh Interval</label>
+                        <select id="news-refresh">
+                            <option value="1" {% if config.news.refresh_interval_minutes == 1 %}selected{% endif %}>1 minute</option>
+                            <option value="2" {% if config.news.refresh_interval_minutes == 2 %}selected{% endif %}>2 minutes</option>
+                            <option value="5" {% if config.news.refresh_interval_minutes == 5 %}selected{% endif %}>5 minutes</option>
+                            <option value="10" {% if config.news.refresh_interval_minutes == 10 %}selected{% endif %}>10 minutes</option>
+                            <option value="15" {% if config.news.refresh_interval_minutes == 15 %}selected{% endif %}>15 minutes</option>
+                            <option value="30" {% if config.news.refresh_interval_minutes == 30 %}selected{% endif %}>30 minutes</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 1; min-width: 150px;">
+                        <label for="news-max-headlines">Max Headlines</label>
+                        <select id="news-max-headlines">
+                            <option value="5" {% if config.news.max_headlines == 5 %}selected{% endif %}>5</option>
+                            <option value="10" {% if config.news.max_headlines == 10 %}selected{% endif %}>10</option>
+                            <option value="15" {% if config.news.max_headlines == 15 %}selected{% endif %}>15</option>
+                            <option value="20" {% if config.news.max_headlines == 20 %}selected{% endif %}>20</option>
+                            <option value="30" {% if config.news.max_headlines == 30 %}selected{% endif %}>30</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="news-scroll-speed">Scroll Speed: <span id="scroll-speed-value">{{ config.news.scroll_speed }}</span> px/s</label>
+                    <input type="range" id="news-scroll-speed" min="60" max="300" step="10"
+                           value="{{ config.news.scroll_speed }}"
+                           oninput="document.getElementById('scroll-speed-value').textContent = this.value">
+                    <p class="help-text" style="margin-top: 4px;">Faster = quicker scrolling (150-200 recommended)</p>
+                </div>
+                <div class="form-group">
+                    <label for="news-font-size">Text Size</label>
+                    <input type="number" id="news-font-size" min="0" max="250" step="10"
+                           value="{{ config.news.font_size }}" placeholder="0 = auto">
+                    <p class="help-text" style="margin-top: 4px;">0 = auto-scale. Actual height is ~68% of value. Long headlines auto-truncate at large sizes.</p>
+                </div>
+            </div>
+
+            <button id="btn-save-clock" class="btn btn-primary" style="margin-top: 20px;">Save</button>
         </section>
 
         <!-- Cache Tab -->
@@ -1096,12 +1102,9 @@
             }
         });
 
-        // Track schedule settings changes
+        // Track schedule settings changes (schedule times only)
         const scheduleInputs = [
-            'weekday-start', 'weekday-end', 'weekend-start', 'weekend-end', 'off-hours-mode',
-            'clock-style', 'clock-size', 'clock-show-date',
-            'weather-enabled', 'weather-city', 'weather-lat', 'weather-lon', 'weather-units', 'weather-font-size',
-            'news-enabled', 'news-feeds', 'news-scroll-speed', 'news-refresh', 'news-max-headlines', 'news-font-size'
+            'weekday-start', 'weekday-end', 'weekend-start', 'weekend-end', 'off-hours-mode'
         ];
         const scheduleOriginalValues = {};
 
@@ -1133,24 +1136,8 @@
             btn.disabled = !hasChanges;
         }
 
-        // Show/hide clock settings based on off-hours mode
-        document.getElementById('off-hours-mode').addEventListener('change', (e) => {
-            const clockSettings = document.getElementById('clock-settings');
-            clockSettings.style.display = e.target.value === 'clock' ? 'block' : 'none';
-            checkScheduleChanges();
-        });
-
-        // Show/hide weather settings based on checkbox
-        document.getElementById('weather-enabled').addEventListener('change', (e) => {
-            document.getElementById('weather-settings').style.display = e.target.checked ? 'block' : 'none';
-            checkScheduleChanges();
-        });
-
-        // Show/hide news settings based on checkbox
-        document.getElementById('news-enabled').addEventListener('change', (e) => {
-            document.getElementById('news-settings').style.display = e.target.checked ? 'block' : 'none';
-            checkScheduleChanges();
-        });
+        // Track off-hours-mode changes
+        document.getElementById('off-hours-mode').addEventListener('change', checkScheduleChanges);
 
         // Initialize schedule tracking
         captureScheduleOriginalValues();
@@ -1172,16 +1159,106 @@
             btn.textContent = 'Saving...';
 
             try {
-                // Parse news feeds from textarea
-                const feedsText = document.getElementById('news-feeds').value;
-                const feedUrls = feedsText.split('\n').map(s => s.trim()).filter(s => s.length > 0);
-
                 const data = {
                     weekday_start: document.getElementById('weekday-start').value,
                     weekday_end: document.getElementById('weekday-end').value,
                     weekend_start: document.getElementById('weekend-start').value,
                     weekend_end: document.getElementById('weekend-end').value,
-                    off_hours_mode: document.getElementById('off-hours-mode').value,
+                    off_hours_mode: document.getElementById('off-hours-mode').value
+                };
+
+                const result = await apiCall('/api/schedule', 'POST', data);
+                if (result.success) {
+                    captureScheduleOriginalValues();
+                    btn.textContent = 'Saved!';
+                    setTimeout(() => {
+                        btn.textContent = 'Save';
+                    }, 1500);
+                } else {
+                    alert('Error: ' + (result.error || 'Unknown error'));
+                    btn.textContent = 'Save';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                alert('Error saving schedule: ' + e);
+                btn.textContent = 'Save';
+                btn.disabled = false;
+            }
+        });
+
+        // Track clock settings changes
+        const clockInputs = [
+            'clock-style', 'clock-size', 'clock-show-date',
+            'weather-enabled', 'weather-city', 'weather-lat', 'weather-lon', 'weather-units', 'weather-font-size',
+            'news-enabled', 'news-feeds', 'news-scroll-speed', 'news-refresh', 'news-max-headlines', 'news-font-size'
+        ];
+        const clockOriginalValues = {};
+
+        function captureClockOriginalValues() {
+            clockInputs.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    if (el.type === 'checkbox') {
+                        clockOriginalValues[id] = el.checked;
+                    } else {
+                        clockOriginalValues[id] = el.value;
+                    }
+                }
+            });
+        }
+
+        function checkClockChanges() {
+            const btn = document.getElementById('btn-save-clock');
+            let hasChanges = false;
+            clockInputs.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    const currentValue = el.type === 'checkbox' ? el.checked : el.value;
+                    if (currentValue !== clockOriginalValues[id]) {
+                        hasChanges = true;
+                    }
+                }
+            });
+            btn.disabled = !hasChanges;
+        }
+
+        // Show/hide weather settings based on checkbox
+        document.getElementById('weather-enabled').addEventListener('change', (e) => {
+            document.getElementById('weather-settings').style.display = e.target.checked ? 'block' : 'none';
+            checkClockChanges();
+        });
+
+        // Show/hide news settings based on checkbox
+        document.getElementById('news-enabled').addEventListener('change', (e) => {
+            document.getElementById('news-settings').style.display = e.target.checked ? 'block' : 'none';
+            checkClockChanges();
+        });
+
+        // Initialize clock tracking
+        captureClockOriginalValues();
+        document.getElementById('btn-save-clock').disabled = true;
+        clockInputs.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('change', checkClockChanges);
+                if (el.type === 'number' || el.type === 'text' || el.tagName === 'TEXTAREA' || el.type === 'range') {
+                    el.addEventListener('input', checkClockChanges);
+                }
+            }
+        });
+
+        // Save clock settings
+        document.getElementById('btn-save-clock').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-save-clock');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                // Parse news feeds from textarea
+                const feedsText = document.getElementById('news-feeds').value;
+                const feedUrls = feedsText.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+
+                const data = {
                     // Clock settings
                     clock_style: document.getElementById('clock-style').value,
                     clock_size: document.getElementById('clock-size').value,
@@ -1204,7 +1281,7 @@
 
                 const result = await apiCall('/api/schedule', 'POST', data);
                 if (result.success) {
-                    captureScheduleOriginalValues();
+                    captureClockOriginalValues();
                     btn.textContent = 'Saved!';
                     setTimeout(() => {
                         btn.textContent = 'Save';
@@ -1215,7 +1292,7 @@
                     btn.disabled = false;
                 }
             } catch (e) {
-                alert('Error saving schedule: ' + e);
+                alert('Error saving clock settings: ' + e);
                 btn.textContent = 'Save';
                 btn.disabled = false;
             }
