@@ -133,11 +133,14 @@
             <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border);">
                 <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                     <button id="btn-sync" class="btn btn-primary">Sync Now</button>
-                    <button id="btn-full-sync" class="btn btn-primary">Full Sync Now</button>
+                    <button id="btn-refetch-sync" class="btn btn-primary">Full Re-sync</button>
                     <button id="btn-stop-sync" class="btn btn-danger" disabled>Stop Sync</button>
                 </div>
                 <p class="help-text" style="margin-top: 8px;">
-                    Full Sync also re-fetches photo metadata for remote albums (slower). Otherwise, only new photos get metadata.
+                    <strong>Sync Now:</strong> Downloads new photos and fetches metadata for photos missing it.<br>
+                    <strong>Full Re-sync:</strong> Syncs photos AND re-downloads metadata for ALL Google Photos (slow).<br>
+                    <em>Note: These options only affect Google Photos albums. Local albums use embedded EXIF metadata.</em><br>
+                    <em>Tip: If sync stops due to memory limits on large albums, run Sync Now again to continue.</em>
                 </p>
             </div>
 
@@ -966,13 +969,13 @@
                 const progressText = document.getElementById('sync-progress-text');
                 const stopMessage = document.getElementById('sync-stop-message');
                 const syncBtn = document.getElementById('btn-sync');
-                const fullSyncBtn = document.getElementById('btn-full-sync');
+                const refetchSyncBtn = document.getElementById('btn-refetch-sync');
                 const stopBtn = document.getElementById('btn-stop-sync');
 
                 if (progress.is_syncing) {
                     progressDiv.style.display = 'block';
                     syncBtn.disabled = true;
-                    fullSyncBtn.disabled = true;
+                    refetchSyncBtn.disabled = true;
                     syncBtn.textContent = 'Syncing...';
                     stopBtn.disabled = false;
                     stopMessage.style.display = 'none';
@@ -1032,7 +1035,7 @@
                     }
 
                     syncBtn.disabled = false;
-                    fullSyncBtn.disabled = false;
+                    refetchSyncBtn.disabled = false;
                     syncBtn.textContent = 'Sync Now';
                     stopBtn.disabled = true;
 
@@ -1051,7 +1054,7 @@
                     // Idle state
                     progressDiv.style.display = 'none';
                     syncBtn.disabled = false;
-                    fullSyncBtn.disabled = false;
+                    refetchSyncBtn.disabled = false;
                     syncBtn.textContent = 'Sync Now';
                     stopBtn.disabled = true;
                     if (syncPollInterval) {
@@ -1065,7 +1068,8 @@
         }
 
         // Shared sync trigger function
-        async function triggerSync(fullSync) {
+        // refetchAll: if true, reset all metadata flags and re-fetch everything
+        async function triggerSync(refetchAll = false) {
             const progressDiv = document.getElementById('sync-progress');
             const stageHeader = document.getElementById('sync-stage-header');
             const albumInfo = document.getElementById('sync-album-info');
@@ -1098,18 +1102,27 @@
 
             // Show progress immediately
             progressDiv.style.display = 'block';
-            stageHeader.textContent = fullSync ? 'Starting full sync...' : 'Starting sync...';
+            stageHeader.textContent = refetchAll ? 'Starting full re-sync...' : 'Starting sync...';
             albumInfo.textContent = '';
             progressBar.style.width = '0%';
             progressText.textContent = '';
             stopMessage.style.display = 'none';
 
             document.getElementById('btn-sync').disabled = true;
-            document.getElementById('btn-full-sync').disabled = true;
+            document.getElementById('btn-refetch-sync').disabled = true;
             document.getElementById('btn-sync').textContent = 'Syncing...';
             document.getElementById('btn-stop-sync').disabled = false;
 
-            await apiCall('/api/sync', 'POST', { update_all_captions: fullSync });
+            // Always use update_all_captions=true (fetch for new + unfetched photos)
+            // If refetchAll, also set force_refetch_captions to reset all flags first
+            if (refetchAll) {
+                await apiCall('/api/sync', 'POST', {
+                    update_all_captions: true,
+                    force_refetch_captions: true
+                });
+            } else {
+                await apiCall('/api/sync', 'POST', { update_all_captions: true });
+            }
 
             // Start polling for progress
             if (!syncPollInterval) {
@@ -1117,11 +1130,15 @@
             }
         }
 
-        // Sync button (quick sync - new photos only)
+        // Sync Now - fetch metadata for new + unfetched photos
         document.getElementById('btn-sync').addEventListener('click', () => triggerSync(false));
 
-        // Full Sync button (re-fetch all metadata)
-        document.getElementById('btn-full-sync').addEventListener('click', () => triggerSync(true));
+        // Full Re-sync - reset flags and re-fetch everything (with confirmation)
+        document.getElementById('btn-refetch-sync').addEventListener('click', () => {
+            if (confirm('This will sync photos AND re-download metadata for ALL Google Photos. This may take a long time. Continue?')) {
+                triggerSync(true);
+            }
+        });
 
         // Stop sync button
         document.getElementById('btn-stop-sync').addEventListener('click', async () => {
