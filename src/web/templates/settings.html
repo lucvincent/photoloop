@@ -80,7 +80,7 @@
 
             <div class="status-box" style="margin-top: 20px;">
                 <h3 style="margin-top: 0;">
-                    <span id="state" class="status-badge">-</span>
+                    Status: <span id="state" class="status-badge">-</span>
                     <span id="mode-reason" class="mode-reason"></span>
                 </h3>
                 <div id="current-status">
@@ -564,13 +564,13 @@
 
                     if (displayMode === 'slideshow') {
                         if (!hasContent) {
-                            displayText = 'No Photos';
+                            displayText = 'No Albums or Photos';
                             badgeClass = 'status-badge stopped';
                         } else if (isPaused) {
-                            displayText = 'Slideshow (Paused)';
+                            displayText = 'Slideshow Paused';
                             badgeClass = 'status-badge paused';
                         } else {
-                            displayText = 'Slideshow';
+                            displayText = 'Slideshow Running';
                             badgeClass = 'status-badge running';
                         }
                     } else if (displayMode === 'clock') {
