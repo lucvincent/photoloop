@@ -34,6 +34,9 @@ evdev>=1.6.0
 # Holiday detection for scheduling
 holidays>=0.40
 
+# Systemd integration (watchdog support)
+sdnotify>=0.3.0
+
 # Testing
 pytest>=7.0.0
 
