@@ -576,6 +576,25 @@ sync:
 - `sync_on_start`: If true, does an immediate sync on service start (independent of `sync_time`)
 - Only enabled albums (marked "Show" in Albums tab) are synced
 
+**Metadata fetching:**
+Every sync (scheduled, sync-on-start, or manual) fetches Google Photos metadata (captions,
+locations, dates) for photos that don't have it yet (`google_metadata_fetched=false`).
+
+This is important because Chrome often runs out of memory during metadata fetching on large
+albums. The `google_metadata_fetched` flag tracks which photos have been processed:
+- `true`: Metadata was fetched (may still be null if photo has no caption/location)
+- `false`: Not yet fetched (due to OOM, interruption, or newly downloaded)
+
+Each subsequent sync picks up where the previous one left off, eventually fetching metadata
+for all photos even on memory-constrained devices like the Pi.
+
+To force re-fetching ALL metadata (e.g., if extraction logic changed):
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"force_refetch_captions": true}' \
+  http://localhost:8080/api/sync
+```
+
 **Examples:**
 - Sync daily at 3am: `sync_time: "03:00"`, `interval_minutes: 1440`
 - Sync hourly starting at midnight: `sync_time: "00:00"`, `interval_minutes: 60`

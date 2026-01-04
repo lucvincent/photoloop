@@ -331,7 +331,8 @@ class PhotoLoop:
                     return  # Shutdown requested
                 try:
                     logger.info("Starting sync-on-start...")
-                    self.cache_manager.sync()
+                    # Always try to fetch metadata for photos that don't have it yet
+                    self.cache_manager.sync(update_all_captions=True)
                     logger.info("Sync-on-start completed")
                 except Exception as e:
                     logger.error(f"Sync-on-start error: {e}")
@@ -357,7 +358,8 @@ class PhotoLoop:
             while not self._shutdown_event.is_set():
                 try:
                     logger.info("Starting scheduled album sync...")
-                    self.cache_manager.sync()
+                    # Always try to fetch metadata for photos that don't have it yet
+                    self.cache_manager.sync(update_all_captions=True)
                     logger.info("Scheduled sync completed")
                 except Exception as e:
                     logger.error(f"Sync error: {e}")
