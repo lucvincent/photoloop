@@ -7,6 +7,7 @@ Orchestrates all components: display, caching, scheduling, and web interface.
 
 import argparse
 from datetime import datetime, timedelta
+import gc
 import logging
 import os
 import signal
@@ -532,6 +533,10 @@ class PhotoLoop:
         watchdog_interval = 10  # seconds
         last_watchdog = time.time()
 
+        # Periodic garbage collection to prevent GPU memory fragmentation
+        gc_interval = 30  # seconds
+        last_gc = time.time()
+
         while self._running and not self._shutdown_event.is_set():
             try:
                 # Get scheduled display mode from scheduler
@@ -665,6 +670,11 @@ class PhotoLoop:
                     else:
                         logger.warning(f"Not sending watchdog - display unhealthy: {health}")
                     last_watchdog = now
+
+                # Periodic garbage collection to ensure GPU resources are freed
+                if now - last_gc >= gc_interval:
+                    gc.collect()
+                    last_gc = now
 
             except DisplayRecoveryError as e:
                 # Display recovery failed - exit for systemd restart

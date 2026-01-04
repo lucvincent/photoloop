@@ -275,7 +275,9 @@ class Display:
         """
         Verify that rendering is actually working.
 
-        Attempts a simple render operation and checks for success.
+        Tests both basic clear/present AND texture operations.
+        This is critical because DPMS wake can corrupt the texture subsystem
+        while clear/present still works, leading to silent failures.
 
         Returns:
             True if render is healthy, False if intervention needed.
@@ -283,9 +285,31 @@ class Display:
         if not self.has_valid_renderer:
             return False
         try:
+            # Test 1: Basic clear/present
             self._renderer.draw_color = (0, 0, 0, 255)
             self._renderer.clear()
             self._renderer.present()
+
+            # Test 2: Texture creation and drawing using SAME code path as photos
+            # CRITICAL: Must use pygame.image.fromstring() like _pil_to_texture(),
+            # NOT pygame.Surface().fill() which uses a different internal path.
+            # This catches texture subsystem corruption that clear/present misses.
+            test_w, test_h = 256, 256  # Reasonable size for health check
+            pixel = bytes([255, 0, 0])  # Red
+            data = pixel * (test_w * test_h)
+            test_surface = pygame.image.fromstring(data, (test_w, test_h), "RGB")
+            test_texture = sdl2.Texture.from_surface(self._renderer, test_surface)
+            test_texture.blend_mode = 1  # Same as _pil_to_texture
+            test_texture.draw(dstrect=(0, 0, test_w, test_h))
+            self._renderer.present()
+            del test_texture  # Explicit cleanup to avoid GPU memory leak
+            del test_surface
+
+            # Clear back to black so test pattern doesn't flash on screen
+            self._renderer.draw_color = (0, 0, 0, 255)
+            self._renderer.clear()
+            self._renderer.present()
+
             self._consecutive_render_failures = 0
             self._last_successful_render = time.time()
             return True
@@ -1478,6 +1502,12 @@ class Display:
 
         overlay_texture.draw(dstrect=(x, y, bg_width, bg_height))
 
+        # Explicit cleanup to prevent GPU memory fragmentation
+        del overlay_texture
+        del bg_surface
+        for surf in text_surfaces:
+            del surf
+
     def _wrap_text(self, text: str, max_width_chars: int = 50) -> list:
         """Wrap text to fit within screen."""
         words = text.split()
@@ -2173,16 +2203,49 @@ class Display:
             if not self._full_reinitialize():
                 raise DisplayRecoveryError("Full pygame reinit failed after DPMS wake")
 
-            # GPU burn-in: Render black frames to stabilize compositor buffers
-            # This is shorter since we just did a full reinit
-            logger.info("GPU burn-in after pygame reinit")
+            # GPU burn-in Phase 1: Render black frames to stabilize compositor buffers
+            logger.info("GPU burn-in phase 1: clear/present")
             for i in range(45):  # ~1.5 seconds at 30fps
                 self._renderer.draw_color = self._bg_color
                 self._renderer.clear()
                 self._renderer.present()
                 time.sleep(1.0 / 30)
 
-            # Verify health after burn-in
+            # GPU burn-in Phase 2: Texture stress test using SAME code path as photos
+            # The basic clear/present above doesn't exercise the texture code path.
+            # CRITICAL: Must use pygame.image.fromstring() like _pil_to_texture() does,
+            # NOT pygame.Surface().fill() which uses a different internal path.
+            # Also test at screen resolution to catch large texture allocation issues.
+            logger.info("GPU burn-in phase 2: texture stress test (fromstring path)")
+            test_w, test_h = self.screen_width, self.screen_height
+            for i in range(5):  # 5 full-size texture tests
+                # Generate test image data like PIL tobytes() would
+                # RGB data: 3 bytes per pixel, varying color pattern
+                r = (i * 50) % 256
+                g = (i * 30) % 256
+                b = (i * 70) % 256
+                pixel = bytes([r, g, b])
+                data = pixel * (test_w * test_h)  # Full screen of solid color
+
+                # Use pygame.image.fromstring() - SAME as _pil_to_texture()
+                test_surface = pygame.image.fromstring(data, (test_w, test_h), "RGB")
+                test_texture = sdl2.Texture.from_surface(self._renderer, test_surface)
+                test_texture.blend_mode = 1  # Same as _pil_to_texture
+
+                self._renderer.clear()
+                test_texture.draw(dstrect=(0, 0, test_w, test_h))
+                self._renderer.present()
+
+                del test_texture  # Explicit cleanup
+                del test_surface
+                time.sleep(0.1)
+
+            # Clear to black after texture test
+            self._renderer.draw_color = self._bg_color
+            self._renderer.clear()
+            self._renderer.present()
+
+            # Verify health after burn-in (now includes texture test)
             if not self._verify_render_health():
                 raise DisplayRecoveryError("Display unhealthy after pygame reinit")
 
@@ -2399,6 +2462,11 @@ class Display:
         feedback_texture.alpha = alpha  # Set texture alpha for fade effect
         feedback_texture.draw(dstrect=(container_x, container_y, container_size, container_size))
 
+        # Explicit cleanup
+        del feedback_texture
+        del bg_surface
+        del icon_surface
+
         # Render text below container if present (no background)
         if text:
             # Use cached scaled font (avoid creating fonts every frame)
@@ -2412,6 +2480,10 @@ class Display:
             text_texture = self._surface_to_texture(text_surface)
             text_texture.alpha = alpha
             text_texture.draw(dstrect=(text_x, text_y, text_w, text_h))
+
+            # Explicit cleanup
+            del text_texture
+            del text_surface
 
     def _render_paused_indicator(self) -> None:
         """Render subtle persistent 'Paused' indicator in bottom-right corner."""
@@ -2472,6 +2544,11 @@ class Display:
         # Convert to texture and draw
         indicator_texture = self._surface_to_texture(bg_surface)
         indicator_texture.draw(dstrect=(x, y, bg_w, bg_h))
+
+        # Explicit cleanup to prevent GPU memory fragmentation
+        del indicator_texture
+        del bg_surface
+        del text_surface
 
     def handle_events(self) -> list:
         """Process pygame events."""

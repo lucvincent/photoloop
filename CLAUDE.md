@@ -177,14 +177,15 @@ reinit if `_display_powered` is False.
    - Recreate renderer with hardware acceleration
    - Reinitialize fonts (they become invalid after quit/init)
    - Update clock renderer reference
-4. GPU burn-in: 45 black frames at 30fps (~1.5s)
-5. Verify render health
-6. Then display first photo with normal priming
+4. GPU burn-in phase 1: 45 black frames at 30fps (~1.5s)
+5. GPU burn-in phase 2: 10 texture stress tests (~0.5s) - creates/draws/destroys textures
+6. Verify render health (tests both clear/present AND texture operations)
+7. Then display first photo with normal priming
 
 **Known side effects:**
 - Desktop visible for 3-5 seconds during pygame reinit (cosmetic)
 - Window flickers during fullscreen toggle (resolution correction)
-- Total wake time: ~5-6 seconds (vs ~2s before this fix)
+- Total wake time: ~6-7 seconds (includes ~0.5s texture burn-in)
 
 **Previous failed attempts (Jan 2026 debugging session):**
 1. Recreate renderer only - SIGSEGV crash after ~4 frames
@@ -206,6 +207,27 @@ pygame.quit() resets this global state.
 3. If burn-in (clear/present) works but photos crash, it's texture corruption
 4. Verify `_full_reinitialize()` is being called (check for "nuclear option" log)
 5. If still crashing, the issue may be with code added after this fix
+
+**Long-term stability measures (Jan 2026):**
+
+To prevent GPU memory fragmentation and silent render failures over months of use:
+
+1. **Explicit texture cleanup** - Transient textures (overlay, feedback, paused indicator)
+   are explicitly deleted after each draw with `del texture`. This ensures GPU resources
+   are freed immediately rather than waiting for Python GC.
+
+2. **Periodic garbage collection** - `gc.collect()` is called every 30 seconds in the
+   main loop to ensure any missed object references are cleaned up.
+
+3. **Texture-based health check** - `_verify_render_health()` now tests both clear/present
+   AND texture creation/drawing. This catches texture subsystem corruption that
+   clear/present alone would miss.
+
+4. **Texture burn-in after wake** - After DPMS wake, the wake sequence exercises the
+   texture code path with 5 full-screen test textures before rendering actual photos.
+   **CRITICAL**: The burn-in MUST use `pygame.image.fromstring()` (same as `_pil_to_texture()`)
+   NOT `pygame.Surface().fill()` - these use different internal SDL2 code paths and the
+   latter can pass while the former fails silently with white/gray corruption.
 
 **Note:** Even on fresh service start, SDL2 initially reports 1920x1080 for a 4K
 display. The mismatch detection and renderer recreation is needed every time.
