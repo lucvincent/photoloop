@@ -236,6 +236,33 @@ XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 wlopm --off HDMI-A-1
 XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 wlopm --on HDMI-A-1
 ```
 
+### Systemd Watchdog
+
+PhotoLoop supports systemd watchdog for automatic restart if the process hangs.
+
+**How it works:**
+- Service configured with `Type=notify` and `WatchdogSec=60`
+- PhotoLoop sends `WATCHDOG=1` ping every 10 seconds via sdnotify
+- If systemd doesn't receive a ping within 60 seconds, it restarts the service
+- Pings only sent when display health check passes
+
+**Soft dependency:** The `sdnotify` library is optional:
+- If installed: Watchdog support enabled, service auto-restarts on hang
+- If not installed: PhotoLoop works normally, just no watchdog protection
+- The code handles this gracefully with try/except on import
+
+```python
+# From main.py
+try:
+    import sdnotify
+    SDNOTIFY_AVAILABLE = True
+except ImportError:
+    SDNOTIFY_AVAILABLE = False
+```
+
+**Installation:** `sdnotify` is in requirements.txt, so `pip install -r requirements.txt`
+installs it automatically. For manual install: `pip install sdnotify`
+
 ### Methods That Did NOT Work (Dec 2024 - Jan 2025)
 
 1. **DDC/CI via ddcutil** - Caused half-resolution bug on Wayland. Display renders
