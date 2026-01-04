@@ -45,6 +45,7 @@ PrivateTmp=true
 # Allow write access to required directories
 ReadWritePaths=/var/lib/photoloop
 ReadWritePaths=/var/log/photoloop
+ReadWritePaths=/etc/photoloop
 
 [Install]
 WantedBy=graphical.target
