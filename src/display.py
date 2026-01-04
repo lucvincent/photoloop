@@ -1839,8 +1839,83 @@ class Display:
 
         return None
 
+    def _verify_output_enabled(self, output_name: str) -> bool:
+        """Check if the Wayland output is enabled (not just DPMS on, but actually enabled).
+
+        Returns True if the output is enabled and receiving signal.
+        """
+        try:
+            env = os.environ.copy()
+            env['XDG_RUNTIME_DIR'] = '/run/user/1000'
+            env['WAYLAND_DISPLAY'] = 'wayland-0'
+
+            result = subprocess.run(
+                ['wlr-randr'],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env
+            )
+
+            if result.returncode == 0:
+                # Parse output to check if our output is enabled
+                in_our_output = False
+                for line in result.stdout.split('\n'):
+                    if output_name in line:
+                        in_our_output = True
+                    elif in_our_output and line.strip().startswith('Enabled:'):
+                        enabled = 'yes' in line.lower()
+                        logger.debug(f"Output {output_name} enabled: {enabled}")
+                        return enabled
+                    elif in_our_output and line and not line.startswith(' '):
+                        # Moved to next output
+                        break
+        except Exception as e:
+            logger.debug(f"Failed to check output enabled state: {e}")
+        return False
+
+    def _try_enable_output(self, output_name: str) -> bool:
+        """Try to enable a disabled Wayland output via wlr-randr.
+
+        This is needed when the output gets completely disabled (not just DPMS off).
+        wlopm can only control DPMS state, not enable/disable the output itself.
+
+        Returns True if successful.
+        """
+        try:
+            env = os.environ.copy()
+            env['XDG_RUNTIME_DIR'] = '/run/user/1000'
+            env['WAYLAND_DISPLAY'] = 'wayland-0'
+
+            logger.info(f"Attempting to enable disabled output {output_name} via wlr-randr")
+            result = subprocess.run(
+                ['wlr-randr', '--output', output_name, '--on'],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env
+            )
+
+            if result.returncode == 0:
+                logger.info(f"Successfully enabled output {output_name}")
+                return True
+            else:
+                logger.warning(f"wlr-randr --on failed: {result.stderr}")
+        except Exception as e:
+            logger.warning(f"Failed to enable output: {e}")
+        return False
+
     def _try_wlopm(self, on: bool, output_name: str) -> bool:
-        """Try wlopm (Wayland DPMS) power control. Returns True if successful."""
+        """Try wlopm (Wayland DPMS) power control. Returns True if successful.
+
+        IMPORTANT (Jan 2026): wlopm --on may return success (exit code 0) even when
+        the display doesn't actually wake. This can happen if the Wayland output
+        is completely disabled (Enabled: no in wlr-randr), not just in DPMS standby.
+        wlopm can only control DPMS state - it cannot re-enable a disabled output.
+
+        When turning on, we verify the output is actually enabled and attempt to
+        fix it if not.
+        """
         try:
             env = os.environ.copy()
             env['XDG_RUNTIME_DIR'] = '/run/user/1000'
@@ -1857,6 +1932,28 @@ class Display:
 
             if result.returncode == 0:
                 logger.info(f"Display power {'on' if on else 'off'} (wlopm DPMS: {output_name})")
+
+                # When turning ON, verify the output is actually enabled
+                # wlopm --on can return success but fail to wake if output is disabled
+                if on:
+                    time.sleep(0.5)  # Brief delay for state to settle
+                    if not self._verify_output_enabled(output_name):
+                        logger.warning(f"Output {output_name} still disabled after wlopm --on, attempting to enable")
+                        if self._try_enable_output(output_name):
+                            # Output enabled, now try wlopm again
+                            time.sleep(0.5)
+                            subprocess.run(
+                                ['wlopm', '--on', output_name],
+                                capture_output=True,
+                                text=True,
+                                timeout=10,
+                                env=env
+                            )
+                            return True
+                        else:
+                            logger.error(f"CRITICAL: Cannot enable output {output_name} - display may need manual intervention or lightdm restart")
+                            return False
+
                 return True
             else:
                 logger.debug(f"wlopm failed: {result.stderr}")

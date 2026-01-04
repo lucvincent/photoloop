@@ -217,8 +217,48 @@ display. The mismatch detection and renderer recreation is needed every time.
 
 **Fallback chain:**
 1. wlopm (Wayland DPMS) - primary method for labwc/Wayland
-2. HDMI-CEC (for TVs) - uses cec-client
-3. Black screen (if neither available)
+2. wlr-randr --on (if output is disabled, not just DPMS off)
+3. HDMI-CEC (for TVs) - uses cec-client
+4. Black screen (if neither available)
+
+**============================================================================**
+**CRITICAL: Output Disabled vs DPMS Off (Jan 2026)**
+**============================================================================**
+
+There are TWO different "off" states for a Wayland output:
+1. **DPMS standby** (`wlopm` shows "off") - Display is in power-saving mode
+2. **Output disabled** (`wlr-randr` shows "Enabled: no") - No signal sent at all
+
+`wlopm --on` can only wake from DPMS standby. If the output is completely
+disabled, `wlopm --on` returns success (exit code 0) but has NO EFFECT.
+
+**Symptoms when output is disabled:**
+- Monitor shows "No Signal" when manually woken
+- `wlopm --on` returns success but `wlopm` still shows "off"
+- `wlr-randr` shows `Enabled: no`
+- PhotoLoop thinks it's rendering but nothing appears on screen
+
+**Solution (implemented Jan 2026):**
+After `wlopm --on`, verify output is actually enabled via `wlr-randr`.
+If still disabled, attempt to re-enable via `wlr-randr --output HDMI-A-1 --on`.
+See `_verify_output_enabled()` and `_try_enable_output()` in display.py.
+
+**Manual recovery if automatic fix fails:**
+```bash
+# Check if output is disabled
+XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 wlr-randr | grep -A5 HDMI
+
+# If "Enabled: no", restart lightdm to reset display state
+sudo systemctl restart lightdm
+
+# Then restart PhotoLoop
+sudo systemctl restart photoloop
+```
+
+**Root cause (unknown):**
+It's unclear why the output sometimes becomes disabled instead of just entering
+DPMS standby. This may be a labwc/wlroots issue or a race condition. The symptom
+appeared after overnight DPMS off, but the exact trigger is unknown.
 
 **Config options:**
 - `off_hours_mode: "black"` - display powers off during off-hours
