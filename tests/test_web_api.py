@@ -28,6 +28,27 @@ class TestWebAppFixtures:
         config.schedule.weekday.end_time = "22:00"
         config.schedule.weekend.start_time = "08:00"
         config.schedule.weekend.end_time = "23:00"
+
+        # Clock config (needed by templates)
+        config.clock.style = "digital_24h"
+        config.clock.size = "medium"
+        config.clock.show_date = True
+
+        # Weather config (needed by templates)
+        config.weather.enabled = False
+        config.weather.city_name = ""
+        config.weather.latitude = None
+        config.weather.longitude = None
+        config.weather.units = "fahrenheit"
+        config.weather.font_size = 0
+
+        # News config (needed by templates)
+        config.news.enabled = False
+        config.news.feed_urls = []
+        config.news.refresh_interval_minutes = 15
+        config.news.max_headlines = 10
+        config.news.scroll_speed = 100
+        config.news.font_size = 0
         # Create album mocks with explicit property values
         album1 = MagicMock()
         album1.url = "https://photos.app.goo.gl/test1"
@@ -52,6 +73,13 @@ class TestWebAppFixtures:
         cache_manager = MagicMock()
         cache_manager.get_media_count.return_value = {"photos": 100, "videos": 5, "total": 105}
         cache_manager.get_cache_size_mb.return_value = 250.5
+        cache_manager.get_cache_size_breakdown.return_value = {
+            "total": 250.5,
+            "photos": 200.0,
+            "videos": 50.0,
+            "rendered": 0.5
+        }
+        cache_manager.has_displayable_media.return_value = True
         cache_manager.get_all_media.return_value = [
             MagicMock(
                 media_id="photo1",
@@ -99,13 +127,30 @@ class TestWebAppFixtures:
         scheduler = MagicMock()
         scheduler.get_status.return_value = {
             "state": "active",
+            "display_mode": "slideshow",
+            "mode_reason": "scheduled",
+            "should_show_slideshow": True,
+            "off_hours_mode": "black",
+            "default_screensaver_mode": "black",
             "has_override": False,
-            "has_temporary_override": False,
-            "temporary_override_until": None,
-            "next_transition": None,
-            "schedule_enabled": True
+            "override": None,
+            "holidays": {
+                "enabled": False,
+                "countries": [],
+                "is_holiday_today": False
+            },
+            "next_transition": {
+                "time": None,
+                "description": None
+            },
+            "today": {
+                "is_weekend": False,
+                "is_override": False,
+                "events": []
+            },
+            "current_time": "2025-01-06T10:00:00"
         }
-        scheduler.force_on_temporarily.return_value = datetime(2025, 1, 6, 22, 0)
+        scheduler.get_override_expiry.return_value = None
         return scheduler
 
     @pytest.fixture
@@ -406,16 +451,6 @@ class TestControlEndpoints(TestWebAppFixtures):
         data = json.loads(response.data)
         assert data["action"] == "reload"
 
-    def test_control_start_temp(self, client, mock_scheduler):
-        """Test POST /api/control/start_temp for temporary override."""
-        response = client.post("/api/control/start_temp")
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert data["success"] is True
-        assert data["action"] == "start_temp"
-        assert data["until"] == "2025-01-06T22:00:00"
-        mock_scheduler.force_on_temporarily.assert_called_once()
-
     def test_control_invalid_action(self, client):
         """Test POST /api/control with invalid action."""
         response = client.post("/api/control/invalid_action")
@@ -602,6 +637,27 @@ class TestIndexPage(TestWebAppFixtures):
                     "background_color": [0, 0, 0, 128],
                     "padding": 20,
                     "max_caption_length": 200
+                },
+                "clock": {
+                    "style": "digital_24h",
+                    "size": "medium",
+                    "show_date": True
+                },
+                "weather": {
+                    "enabled": False,
+                    "city_name": "",
+                    "latitude": None,
+                    "longitude": None,
+                    "units": "fahrenheit",
+                    "font_size": 0
+                },
+                "news": {
+                    "enabled": False,
+                    "feed_urls": [],
+                    "refresh_interval_minutes": 15,
+                    "max_headlines": 10,
+                    "scroll_speed": 100,
+                    "font_size": 0
                 }
             }
             response = client.get("/")

@@ -199,7 +199,7 @@ class TestConfigDefaults:
 
         config = KenBurnsConfig()
 
-        assert config.enabled == True
+        assert config.enabled == False  # Disabled by default (experimental feature)
         assert config.zoom_range == [1.0, 1.15]
         assert config.pan_speed == 0.02
 

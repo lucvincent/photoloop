@@ -221,7 +221,7 @@ display:
 #
 # Fallback when no faces found:
 # fallback_crop: center, top, bottom
-# crop_bias:     center, top, bottom (bias direction when cropping)
+# crop_bias:     none, top, bottom (bias direction when cropping)
 #
 # Saliency detection settings (when smart_crop_method includes saliency):
 # saliency_threshold: Minimum saliency score (0.0-1.0)
@@ -236,7 +236,7 @@ scaling:
   face_detection: true                 # Enable face detection
   face_position: "center"              # center, rule_of_thirds, top_third
   fallback_crop: "center"              # center, top, bottom (when no faces)
-  crop_bias: "center"                  # center, top, bottom
+  crop_bias: "none"                    # none, top, bottom
   saliency_threshold: 0.3              # 0.0-1.0
   saliency_coverage: 0.9               # 0.0-1.0
 

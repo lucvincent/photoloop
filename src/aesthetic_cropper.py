@@ -52,189 +52,188 @@ class CropCandidate:
         }
 
 
-class RoIAlignCPU(nn.Module):
-    """CPU-compatible RoI Align using torchvision."""
+# PyTorch-dependent classes - only defined when torch is available
+if TORCH_AVAILABLE:
+    class RoIAlignCPU(nn.Module):
+        """CPU-compatible RoI Align using torchvision."""
 
-    def __init__(self, output_size: int, spatial_scale: float):
-        super().__init__()
-        self.output_size = output_size
-        self.spatial_scale = spatial_scale
+        def __init__(self, output_size: int, spatial_scale: float):
+            super().__init__()
+            self.output_size = output_size
+            self.spatial_scale = spatial_scale
 
-    def forward(self, features: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
+        def forward(self, features: 'torch.Tensor', boxes: 'torch.Tensor') -> 'torch.Tensor':
+            """
+            Apply RoI Align to extract features from regions.
+
+            Args:
+                features: (N, C, H, W) feature tensor
+                boxes: (K, 5) tensor with [batch_idx, x1, y1, x2, y2]
+
+            Returns:
+                (K, C, output_size, output_size) aligned features
+            """
+            # torchvision roi_align expects boxes in (x1, y1, x2, y2) format
+            # and a list of tensors, one per batch item
+            batch_size = features.shape[0]
+            box_list = []
+
+            for b in range(batch_size):
+                mask = boxes[:, 0] == b
+                box_list.append(boxes[mask, 1:5] * self.spatial_scale)
+
+            return roi_align(
+                features,
+                box_list,
+                output_size=self.output_size,
+                spatial_scale=1.0,  # Already scaled boxes
+                aligned=True
+            )
+
+    class RoDAlignCPU(nn.Module):
         """
-        Apply RoI Align to extract features from regions.
+        CPU-compatible RoD (Region of Discarding) Align.
 
-        Args:
-            features: (N, C, H, W) feature tensor
-            boxes: (K, 5) tensor with [batch_idx, x1, y1, x2, y2]
-
-        Returns:
-            (K, C, output_size, output_size) aligned features
+        RoDAlign extracts features from the region OUTSIDE the crop box,
+        which helps the model learn what should be excluded. This is a
+        simplified CPU implementation that approximates the CUDA version.
         """
-        # torchvision roi_align expects boxes in (x1, y1, x2, y2) format
-        # and a list of tensors, one per batch item
-        batch_size = features.shape[0]
-        box_list = []
 
-        for b in range(batch_size):
-            mask = boxes[:, 0] == b
-            box_list.append(boxes[mask, 1:5] * self.spatial_scale)
+        def __init__(self, output_size: int, spatial_scale: float):
+            super().__init__()
+            self.output_size = output_size
+            self.spatial_scale = spatial_scale
 
-        return roi_align(
-            features,
-            box_list,
-            output_size=self.output_size,
-            spatial_scale=1.0,  # Already scaled boxes
-            aligned=True
+        def forward(self, features: 'torch.Tensor', boxes: 'torch.Tensor') -> 'torch.Tensor':
+            """
+            Extract features from regions outside the boxes.
+
+            This creates a "context" representation by pooling features
+            from the entire image with the box region masked out.
+            """
+            batch_size, channels, height, width = features.shape
+            num_boxes = boxes.shape[0]
+
+            # Output tensor
+            output = torch.zeros(
+                num_boxes, channels, self.output_size, self.output_size,
+                device=features.device, dtype=features.dtype
+            )
+
+            for i in range(num_boxes):
+                batch_idx = int(boxes[i, 0])
+                x1 = int(boxes[i, 1] * self.spatial_scale)
+                y1 = int(boxes[i, 2] * self.spatial_scale)
+                x2 = int(boxes[i, 3] * self.spatial_scale)
+                y2 = int(boxes[i, 4] * self.spatial_scale)
+
+                # Clamp to feature map bounds
+                x1 = max(0, min(x1, width))
+                y1 = max(0, min(y1, height))
+                x2 = max(0, min(x2, width))
+                y2 = max(0, min(y2, height))
+
+                # Create mask for outside region
+                feat = features[batch_idx].clone()
+                mask = torch.ones(height, width, device=features.device)
+                if x2 > x1 and y2 > y1:
+                    mask[y1:y2, x1:x2] = 0
+
+                # Apply mask and pool
+                masked_feat = feat * mask.unsqueeze(0)
+
+                # Adaptive average pool to output size
+                pooled = F.adaptive_avg_pool2d(masked_feat.unsqueeze(0), self.output_size)
+                output[i] = pooled[0]
+
+            return output
+
+    def _build_fc_layers(reddim: int = 32, alignsize: int = 8) -> 'nn.Sequential':
+        """Build the fully connected layers for score prediction."""
+        return nn.Sequential(
+            nn.Conv2d(reddim, 768, kernel_size=alignsize, padding=0),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(768, 128, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 1, kernel_size=1)
         )
 
-
-class RoDAlignCPU(nn.Module):
-    """
-    CPU-compatible RoD (Region of Discarding) Align.
-
-    RoDAlign extracts features from the region OUTSIDE the crop box,
-    which helps the model learn what should be excluded. This is a
-    simplified CPU implementation that approximates the CUDA version.
-    """
-
-    def __init__(self, output_size: int, spatial_scale: float):
-        super().__init__()
-        self.output_size = output_size
-        self.spatial_scale = spatial_scale
-
-    def forward(self, features: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
+    class GAICModel(nn.Module):
         """
-        Extract features from regions outside the boxes.
+        GAIC model adapted for CPU inference.
 
-        This creates a "context" representation by pooling features
-        from the entire image with the box region masked out.
+        Uses MobileNetV2 backbone with CPU-compatible RoI operations.
         """
-        batch_size, channels, height, width = features.shape
-        num_boxes = boxes.shape[0]
 
-        # Output tensor
-        output = torch.zeros(
-            num_boxes, channels, self.output_size, self.output_size,
-            device=features.device, dtype=features.dtype
-        )
+        def __init__(self, alignsize: int = 8, reddim: int = 32):
+            super().__init__()
 
-        for i in range(num_boxes):
-            batch_idx = int(boxes[i, 0])
-            x1 = int(boxes[i, 1] * self.spatial_scale)
-            y1 = int(boxes[i, 2] * self.spatial_scale)
-            x2 = int(boxes[i, 3] * self.spatial_scale)
-            y2 = int(boxes[i, 4] * self.spatial_scale)
+            # Use MobileNetV2 as backbone (lightweight)
+            from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
 
-            # Clamp to feature map bounds
-            x1 = max(0, min(x1, width))
-            y1 = max(0, min(y1, height))
-            x2 = max(0, min(x2, width))
-            y2 = max(0, min(y2, height))
+            model = mobilenet_v2(weights=MobileNet_V2_Weights.DEFAULT)
 
-            # Create mask for outside region
-            feat = features[batch_idx].clone()
-            mask = torch.ones(height, width, device=features.device)
-            if x2 > x1 and y2 > y1:
-                mask[y1:y2, x1:x2] = 0
+            # Extract feature layers at different scales
+            self.feature3 = nn.Sequential(*list(model.features[:7]))   # 1/8 scale
+            self.feature4 = nn.Sequential(*list(model.features[7:14])) # 1/16 scale
+            self.feature5 = nn.Sequential(*list(model.features[14:-1])) # 1/32 scale
 
-            # Apply mask and pool
-            masked_feat = feat * mask.unsqueeze(0)
+            # Dimension reduction (448 = 32 + 96 + 320 channels from MobileNetV2)
+            self.DimRed = nn.Conv2d(448, reddim, kernel_size=1, padding=0)
 
-            # Adaptive average pool to output size
-            pooled = F.adaptive_avg_pool2d(masked_feat.unsqueeze(0), self.output_size)
-            output[i] = pooled[0]
+            # RoI operations (CPU versions)
+            downsample = 4
+            self.RoIAlign = RoIAlignCPU(alignsize, 1.0 / 2**downsample)
+            self.RoDAlign = RoDAlignCPU(alignsize, 1.0 / 2**downsample)
 
-        return output
+            # Prediction layers
+            self.FC_layers = _build_fc_layers(reddim * 2, alignsize)
 
+        def forward(self, images: 'torch.Tensor', boxes: 'torch.Tensor') -> 'torch.Tensor':
+            """
+            Score crop candidates.
 
-def _build_fc_layers(reddim: int = 32, alignsize: int = 8) -> nn.Sequential:
-    """Build the fully connected layers for score prediction."""
-    return nn.Sequential(
-        nn.Conv2d(reddim, 768, kernel_size=alignsize, padding=0),
-        nn.ReLU(inplace=True),
-        nn.Conv2d(768, 128, kernel_size=1),
-        nn.ReLU(inplace=True),
-        nn.Conv2d(128, 1, kernel_size=1)
-    )
+            Args:
+                images: (N, 3, H, W) input images
+                boxes: (N, K, 4) crop boxes in [x1, y1, x2, y2] format (pixel coords)
 
+            Returns:
+                (N*K,) aesthetic scores for each crop
+            """
+            B, N, _ = boxes.shape
 
-class GAICModel(nn.Module):
-    """
-    GAIC model adapted for CPU inference.
+            # Add batch indices to boxes
+            if boxes.shape[-1] == 4:
+                index = torch.arange(B, device=boxes.device).view(-1, 1).repeat(1, N).reshape(B, N, 1)
+                boxes = torch.cat((index, boxes), dim=-1).contiguous()
 
-    Uses MobileNetV2 backbone with CPU-compatible RoI operations.
-    """
+            if boxes.dim() == 3:
+                boxes = boxes.view(-1, 5)
 
-    def __init__(self, alignsize: int = 8, reddim: int = 32):
-        super().__init__()
+            # Extract multi-scale features
+            f3 = self.feature3(images)
+            f4 = self.feature4(f3)
+            f5 = self.feature5(f4)
 
-        # Use MobileNetV2 as backbone (lightweight)
-        from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
+            # Upsample to common resolution
+            f3 = F.interpolate(f3, size=f4.shape[2:], mode='bilinear', align_corners=True)
+            f5 = F.interpolate(f5, size=f4.shape[2:], mode='bilinear', align_corners=True)
 
-        model = mobilenet_v2(weights=MobileNet_V2_Weights.DEFAULT)
+            # Concatenate features
+            cat_feat = torch.cat((f3, f4, 0.5 * f5), dim=1)
 
-        # Extract feature layers at different scales
-        self.feature3 = nn.Sequential(*list(model.features[:7]))   # 1/8 scale
-        self.feature4 = nn.Sequential(*list(model.features[7:14])) # 1/16 scale
-        self.feature5 = nn.Sequential(*list(model.features[14:-1])) # 1/32 scale
+            # Reduce dimensions
+            red_feat = self.DimRed(cat_feat)
 
-        # Dimension reduction (448 = 32 + 96 + 320 channels from MobileNetV2)
-        self.DimRed = nn.Conv2d(448, reddim, kernel_size=1, padding=0)
+            # Extract RoI and RoD features
+            RoI_feat = self.RoIAlign(red_feat, boxes)
+            RoD_feat = self.RoDAlign(red_feat, boxes)
 
-        # RoI operations (CPU versions)
-        downsample = 4
-        self.RoIAlign = RoIAlignCPU(alignsize, 1.0 / 2**downsample)
-        self.RoDAlign = RoDAlignCPU(alignsize, 1.0 / 2**downsample)
+            # Combine and predict
+            final_feat = torch.cat((RoI_feat, RoD_feat), dim=1)
+            prediction = self.FC_layers(final_feat)
 
-        # Prediction layers
-        self.FC_layers = _build_fc_layers(reddim * 2, alignsize)
-
-    def forward(self, images: torch.Tensor, boxes: torch.Tensor) -> torch.Tensor:
-        """
-        Score crop candidates.
-
-        Args:
-            images: (N, 3, H, W) input images
-            boxes: (N, K, 4) crop boxes in [x1, y1, x2, y2] format (pixel coords)
-
-        Returns:
-            (N*K,) aesthetic scores for each crop
-        """
-        B, N, _ = boxes.shape
-
-        # Add batch indices to boxes
-        if boxes.shape[-1] == 4:
-            index = torch.arange(B, device=boxes.device).view(-1, 1).repeat(1, N).reshape(B, N, 1)
-            boxes = torch.cat((index, boxes), dim=-1).contiguous()
-
-        if boxes.dim() == 3:
-            boxes = boxes.view(-1, 5)
-
-        # Extract multi-scale features
-        f3 = self.feature3(images)
-        f4 = self.feature4(f3)
-        f5 = self.feature5(f4)
-
-        # Upsample to common resolution
-        f3 = F.interpolate(f3, size=f4.shape[2:], mode='bilinear', align_corners=True)
-        f5 = F.interpolate(f5, size=f4.shape[2:], mode='bilinear', align_corners=True)
-
-        # Concatenate features
-        cat_feat = torch.cat((f3, f4, 0.5 * f5), dim=1)
-
-        # Reduce dimensions
-        red_feat = self.DimRed(cat_feat)
-
-        # Extract RoI and RoD features
-        RoI_feat = self.RoIAlign(red_feat, boxes)
-        RoD_feat = self.RoDAlign(red_feat, boxes)
-
-        # Combine and predict
-        final_feat = torch.cat((RoI_feat, RoD_feat), dim=1)
-        prediction = self.FC_layers(final_feat)
-
-        return prediction.view(-1)
+            return prediction.view(-1)
 
 
 class AestheticCropper:
