@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
+# Copyright (c) 2025-2026 Luc Vincent. All Rights Reserved.
 """News headline provider using RSS feeds."""
 
 import logging

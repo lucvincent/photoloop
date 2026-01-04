@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
+# Copyright (c) 2025-2026 Luc Vincent. All Rights Reserved.
 """
 Scheduler for PhotoLoop.
 Handles time-based scheduling with event-based scheduling, holiday awareness,

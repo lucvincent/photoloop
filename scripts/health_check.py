@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
+# Copyright (c) 2025-2026 Luc Vincent. All Rights Reserved.
 """
 PhotoLoop Health Check Script
 

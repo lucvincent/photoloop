@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
+# Copyright (c) 2025-2026 Luc Vincent. All Rights Reserved.
 """
 Text classifier for Google Photos metadata using pattern-based heuristics.
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
+# Copyright (c) 2025-2026 Luc Vincent. All Rights Reserved.
 """Tests for display module.
 
 Note: Many display tests require pygame/SDL2 initialization which

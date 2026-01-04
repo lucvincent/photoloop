@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Luc Vincent. All Rights Reserved.
+# Copyright (c) 2025-2026 Luc Vincent. All Rights Reserved.
 """
 Remote input handler for PhotoLoop.
 Supports Fire TV Remote and similar Bluetooth remotes via evdev.
