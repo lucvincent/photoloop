@@ -770,6 +770,12 @@ class CacheManager:
 
         album_index = 0
         for album in self.config.albums:
+            # Check for stop request before each album
+            if self._sync_stop_requested:
+                logger.info("Sync stopped by user request (before album scrape)")
+                self._generate_stop_message(stats)
+                return stats
+
             # Skip disabled albums
             if not album.enabled:
                 continue
@@ -785,7 +791,14 @@ class CacheManager:
                     self._sync_progress.album_name = album_name
                     self._sync_progress.urls_found = 0
 
-                    items = self._scraper.scrape_album(album.url)
+                    items = self._scraper.scrape_album(album.url, stop_check=lambda: self._sync_stop_requested)
+
+                    # Check if stopped during scrape
+                    if self._sync_stop_requested:
+                        logger.info("Sync stopped by user request (during album scrape)")
+                        self._generate_stop_message(stats)
+                        return stats
+
                     for item in items:
                         item.album_name = album_name
                         item_source_types[item.url] = "google_photos"
@@ -1142,6 +1155,12 @@ class CacheManager:
                         urls_by_album[album_name].add(url)
 
             for album in self.config.albums:
+                # Check for stop request before each album's metadata fetch
+                if self._sync_stop_requested:
+                    logger.info("Sync stopped by user request (before metadata fetch)")
+                    self._generate_stop_message(stats)
+                    return stats
+
                 if not album.enabled or not album.url or album.type != "google_photos":
                     continue
 
@@ -1163,7 +1182,8 @@ class CacheManager:
                         album.url,
                         album_urls,
                         progress_callback=caption_progress,
-                        caption_found_callback=on_caption_found
+                        caption_found_callback=on_caption_found,
+                        stop_check=lambda: self._sync_stop_requested
                     )
 
                     # Final save for any remaining captions
@@ -1171,6 +1191,12 @@ class CacheManager:
                         with self._lock:
                             self._save_metadata()
                         logger.info(f"Final caption save (total updated: {stats['captions_updated']})")
+
+                    # Check if stopped during fetch
+                    if self._sync_stop_requested:
+                        logger.info("Sync stopped by user request (during metadata fetch)")
+                        self._generate_stop_message(stats)
+                        return stats
 
                 except Exception as e:
                     # Save what we have before reporting the error

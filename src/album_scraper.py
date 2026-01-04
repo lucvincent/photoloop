@@ -188,7 +188,7 @@ class AlbumScraper:
             return url
         return url
 
-    def _scroll_and_collect(self, driver: webdriver.Chrome, scroll_pause: float = 0.8) -> Set[str]:
+    def _scroll_and_collect(self, driver: webdriver.Chrome, scroll_pause: float = 0.8, stop_check: Optional[Callable[[], bool]] = None) -> Set[str]:
         """
         Scroll through the page and collect image URLs from network requests.
 
@@ -204,6 +204,7 @@ class AlbumScraper:
         Args:
             driver: WebDriver instance.
             scroll_pause: Time to wait between scrolls.
+            stop_check: Optional callback that returns True if scrolling should stop.
 
         Returns:
             Set of collected base URLs.
@@ -307,6 +308,11 @@ class AlbumScraper:
             # Safety limit for extremely large albums
             if scroll_position > 1000000:
                 logger.warning("Reached maximum scroll limit (1M px)")
+                break
+
+            # Check for stop request
+            if stop_check and stop_check():
+                logger.info(f"Scroll stopped by user request at {scroll_position}px, {len(collected_urls)} URLs collected")
                 break
 
         logger.info(f"Scroll complete. Collected {len(collected_urls)} unique URLs after {scroll_count} scrolls.")
@@ -485,12 +491,13 @@ class AlbumScraper:
 
         return captions
 
-    def scrape_album(self, album_url: str) -> List[MediaItem]:
+    def scrape_album(self, album_url: str, stop_check: Optional[Callable[[], bool]] = None) -> List[MediaItem]:
         """
         Scrape a Google Photos album and return media items.
 
         Args:
             album_url: URL of the public Google Photos album.
+            stop_check: Optional callback that returns True if scraping should stop.
 
         Returns:
             List of MediaItem objects.
@@ -542,7 +549,12 @@ class AlbumScraper:
             # Scroll through page and collect URLs as we go
             # (Google Photos uses virtual scrolling - only visible items are in DOM)
             logger.debug("Scrolling page and collecting URLs...")
-            urls = self._scroll_and_collect(driver)
+            urls = self._scroll_and_collect(driver, stop_check=stop_check)
+
+            # Check for stop after scrolling
+            if stop_check and stop_check():
+                logger.info("Scrape stopped by user request")
+                return []
 
             # Also try extracting any remaining URLs from current page state
             additional_urls = self._extract_urls_from_page(driver)
@@ -628,7 +640,8 @@ class AlbumScraper:
         album_url: str,
         urls_to_fetch: Set[str],
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        caption_found_callback: Optional[Callable[[str, Optional[str]], None]] = None
+        caption_found_callback: Optional[Callable[[str, Optional[str]], None]] = None,
+        stop_check: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Optional[str]]:
         """
         Fetch captions for specific photo URLs from a Google Photos album.
@@ -777,6 +790,16 @@ class AlbumScraper:
                                 progress_callback(total_found, urls_needed)
                             except Exception:
                                 pass
+
+                        # Check for stop request after each photo
+                        if stop_check and stop_check():
+                            logger.info(f"Fetch stopped by user request after {total_found} photos")
+                            # Close detail view before returning
+                            try:
+                                driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
+                            except Exception:
+                                pass
+                            return captions
 
                         # Close detail view
                         driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
