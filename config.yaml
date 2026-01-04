@@ -392,8 +392,6 @@ text_classifier:
 #   Oceania:  AU, NZ
 #   Other:    IL, ZA, EG, RU, UA, TR
 #
-# overrides: Temporary schedule overrides (managed via web UI, auto-expire)
-#
 schedule:
   enabled: true                        # Enable schedule (false = slideshow runs 24/7)
   default_screensaver_mode: "black"    # black or clock
@@ -423,8 +421,6 @@ schedule:
   holidays:
     use_weekend_schedule: false        # Use weekend schedule on holidays
     countries: []                      # e.g., ["US"] or ["US", "FR", "DE"]
-
-  overrides: {}                        # Managed via web UI
 
 
 # ############################################################

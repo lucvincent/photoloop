@@ -207,6 +207,8 @@ class ScheduleConfig:
     weekend: ScheduleTimeConfig = field(default_factory=lambda: ScheduleTimeConfig(
         start_time="08:00", end_time="23:00"
     ))
+    # Legacy: per-day overrides (e.g., {"Monday": {...}}). Not exposed in web UI.
+    # Kept for backward compatibility but not used in practice.
     overrides: Dict[str, ScheduleTimeConfig] = field(default_factory=dict)
 
     # Event-based format fields
