@@ -12,7 +12,7 @@ import shutil
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 import random
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 class SyncProgress:
     """Tracks the current sync progress for UI display."""
     is_syncing: bool = False
-    stage: str = ""  # "idle", "scraping", "downloading", "complete", "error"
+    stage: str = ""  # "idle", "scraping", "downloading", "fetching_metadata", "complete", "stopped", "error"
     album_name: str = ""
     albums_done: int = 0
     albums_total: int = 0
@@ -43,6 +43,22 @@ class SyncProgress:
     error_message: str = ""
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+
+    # 3-stage progress tracking
+    current_stage: int = 0        # 1, 2, or 3 (0 = not started)
+    total_stages: int = 3         # Always 3 for consistency
+    stage_description: str = ""   # "Scanning albums", "Downloading photos", "Fetching metadata"
+    is_full_sync: bool = False    # True for Full Sync Now (refreshes all metadata)
+    has_remote_albums: bool = True  # False if only local albums
+
+    # Per-album progress tracking
+    current_album_index: int = 0      # 1-based index of current album
+    current_album_photos_done: int = 0   # Photos done in current album
+    current_album_photos_total: int = 0  # Total photos in current album
+
+    # Stop feedback
+    albums_completed: int = 0     # Number of albums fully completed before stop
+    stop_message: str = ""        # e.g., "2 albums complete, album 3 partial (45/120)"
 
     def to_dict(self) -> dict:
         return {
@@ -57,6 +73,19 @@ class SyncProgress:
             "error_message": self.error_message,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            # 3-stage progress
+            "current_stage": self.current_stage,
+            "total_stages": self.total_stages,
+            "stage_description": self.stage_description,
+            "is_full_sync": self.is_full_sync,
+            "has_remote_albums": self.has_remote_albums,
+            # Per-album progress
+            "current_album_index": self.current_album_index,
+            "current_album_photos_done": self.current_album_photos_done,
+            "current_album_photos_total": self.current_album_photos_total,
+            # Stop feedback
+            "albums_completed": self.albums_completed,
+            "stop_message": self.stop_message,
         }
 
 
@@ -85,6 +114,9 @@ class CachedMedia:
     google_metadata_fetched: bool = False  # True once Google DOM metadata has been fetched (even if empty)
     source_type: str = "google_photos"  # "google_photos" or "local"
     file_mtime: Optional[str] = None    # For local files: ISO timestamp of file mtime for change detection
+    # New fields for raw text extraction and LLM classification
+    google_raw_texts: Optional[List[Dict[str, Any]]] = None  # Raw DOM texts with source context
+    google_text_classifications: Optional[Dict[str, Dict[str, Any]]] = None  # Cached LLM classification results
 
     def to_dict(self) -> dict:
         return {
@@ -109,11 +141,15 @@ class CachedMedia:
             "google_location": self.google_location,
             "google_metadata_fetched": self.google_metadata_fetched,
             "source_type": self.source_type,
-            "file_mtime": self.file_mtime
+            "file_mtime": self.file_mtime,
+            "google_raw_texts": self.google_raw_texts,
+            "google_text_classifications": self.google_text_classifications
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "CachedMedia":
+        from datetime import datetime
+
         # Migration: handle old 'caption' field
         google_caption = data.get("google_caption")
         embedded_caption = data.get("embedded_caption")
@@ -128,6 +164,53 @@ class CachedMedia:
                     google_caption = old_caption
                 else:
                     embedded_caption = old_caption
+
+        # Load new raw texts and classifications fields
+        google_raw_texts = data.get("google_raw_texts")
+        google_text_classifications = data.get("google_text_classifications")
+        google_location = data.get("google_location")
+
+        # Migration: convert existing google_caption/google_location to raw_texts format
+        # This allows re-classification with Ollama without re-scraping
+        if google_raw_texts is None and data.get("google_metadata_fetched", False):
+            google_raw_texts = []
+            now_iso = datetime.now().isoformat()
+
+            if google_caption:
+                google_raw_texts.append({
+                    "text": google_caption,
+                    "source": "migrated_caption",
+                    "extraction_date": data.get("download_date", now_iso)
+                })
+            if google_location:
+                google_raw_texts.append({
+                    "text": google_location,
+                    "source": "migrated_location",
+                    "extraction_date": data.get("download_date", now_iso)
+                })
+
+            # Create initial classifications trusting existing data
+            # These will be re-classified by Ollama on first display
+            if google_raw_texts and google_text_classifications is None:
+                google_text_classifications = {}
+                if google_caption:
+                    google_text_classifications[google_caption] = {
+                        "classification": "caption",
+                        "confidence": 0.5,  # Low confidence to encourage re-classification
+                        "classified_by": "migration",
+                        "classified_date": now_iso
+                    }
+                if google_location:
+                    google_text_classifications[google_location] = {
+                        "classification": "location",
+                        "confidence": 0.5,  # Low confidence to encourage re-classification
+                        "classified_by": "migration",
+                        "classified_date": now_iso
+                    }
+
+            # Only set if we actually have data
+            if not google_raw_texts:
+                google_raw_texts = None
 
         return cls(
             media_id=data["media_id"],
@@ -148,10 +231,12 @@ class CachedMedia:
             location=data.get("location"),
             gps_latitude=data.get("gps_latitude"),
             gps_longitude=data.get("gps_longitude"),
-            google_location=data.get("google_location"),
+            google_location=google_location,
             google_metadata_fetched=data.get("google_metadata_fetched", False),
             source_type=data.get("source_type", "google_photos"),  # Default for backward compat
-            file_mtime=data.get("file_mtime")
+            file_mtime=data.get("file_mtime"),
+            google_raw_texts=google_raw_texts,
+            google_text_classifications=google_text_classifications
         )
 
 
@@ -193,6 +278,7 @@ class CacheManager:
 
         # Sync progress tracking
         self._sync_progress = SyncProgress()
+        self._sync_stop_requested = False  # Flag to request sync cancellation
 
         # Components
         self._scraper = AlbumScraper(headless=True, timeout=120)
@@ -374,6 +460,54 @@ class CacheManager:
     def get_sync_progress(self) -> SyncProgress:
         """Get current sync progress for UI display."""
         return self._sync_progress
+
+    def stop_sync(self) -> bool:
+        """Request to stop an ongoing sync.
+
+        Returns:
+            True if a sync was in progress and stop was requested,
+            False if no sync was running.
+        """
+        if self._sync_progress.is_syncing:
+            logger.info("Sync stop requested")
+            self._sync_stop_requested = True
+            return True
+        return False
+
+    def _generate_stop_message(self, stats: Dict[str, int]) -> None:
+        """Generate a detailed stop message showing what was saved.
+
+        Updates self._sync_progress.stop_message with information about
+        completed albums and partial progress.
+        """
+        prog = self._sync_progress
+        parts = []
+
+        # Albums completed
+        if prog.albums_completed > 0:
+            if prog.albums_completed == 1:
+                parts.append("1 album complete")
+            else:
+                parts.append(f"{prog.albums_completed} albums complete")
+
+        # Current album partial progress (based on current stage)
+        if prog.current_stage == 2:  # Downloading
+            if prog.downloads_done > 0 and prog.downloads_total > 0:
+                parts.append(f"{prog.downloads_done} of {prog.downloads_total} photos downloaded")
+        elif prog.current_stage == 3:  # Fetching metadata
+            if prog.downloads_done > 0 and prog.downloads_total > 0:
+                parts.append(f"{prog.downloads_done} of {prog.downloads_total} metadata fetched")
+        elif prog.current_stage == 1:  # Scanning
+            if prog.albums_done < prog.albums_total:
+                parts.append(f"scanning album {prog.current_album_index}")
+
+        # Stats summary
+        if stats["new"] > 0:
+            parts.append(f"{stats['new']} new")
+        if stats["deleted"] > 0:
+            parts.append(f"{stats['deleted']} removed")
+
+        prog.stop_message = ", ".join(parts) if parts else "Stopped before any progress"
 
     def set_metadata_update_callback(
         self,
@@ -600,32 +734,48 @@ class CacheManager:
 
         logger.info("Starting album sync...")
 
-        # Initialize sync progress
-        self._sync_progress = SyncProgress(
-            is_syncing=True,
-            stage="scraping",
-            started_at=datetime.now().isoformat()
-        )
+        # Clear stop flag
+        self._sync_stop_requested = False
 
         # Get current time for last_seen
         now = datetime.now().isoformat()
+
+        # Count enabled albums and detect remote albums
+        enabled_albums = [
+            a for a in self.config.albums
+            if a.enabled and ((a.type == "google_photos" and a.url) or (a.type == "local" and a.path))
+        ]
+        total_albums = len(enabled_albums)
+        has_remote_albums = any(a.type == "google_photos" for a in enabled_albums)
+
+        # Initialize sync progress with new 3-stage tracking
+        self._sync_progress = SyncProgress(
+            is_syncing=True,
+            stage="scraping",
+            started_at=datetime.now().isoformat(),
+            albums_total=total_albums,
+            # 3-stage progress
+            current_stage=1,
+            total_stages=3,
+            stage_description="Scanning albums",
+            is_full_sync=update_all_captions or force_refetch_captions,
+            has_remote_albums=has_remote_albums,
+        )
 
         # Scrape all configured albums and scan local directories
         all_items: List[MediaItem] = []
         # Track source type for each item (keyed by URL)
         item_source_types: Dict[str, str] = {}
         albums_scraped_successfully = 0
-        # Count enabled albums that need processing (Google Photos with URL or local with path)
-        total_albums = sum(
-            1 for a in self.config.albums
-            if a.enabled and ((a.type == "google_photos" and a.url) or (a.type == "local" and a.path))
-        )
-        self._sync_progress.albums_total = total_albums
 
+        album_index = 0
         for album in self.config.albums:
             # Skip disabled albums
             if not album.enabled:
                 continue
+
+            album_index += 1
+            self._sync_progress.current_album_index = album_index
 
             try:
                 if album.type == "google_photos" and album.url:
@@ -642,6 +792,7 @@ class CacheManager:
                     all_items.extend(items)
                     albums_scraped_successfully += 1
                     self._sync_progress.albums_done = albums_scraped_successfully
+                    self._sync_progress.albums_completed = albums_scraped_successfully
                     # Record sync timestamp for this album
                     self._album_sync_times[album_name] = now
 
@@ -660,6 +811,7 @@ class CacheManager:
                     all_items.extend(items)
                     albums_scraped_successfully += 1
                     self._sync_progress.albums_done = albums_scraped_successfully
+                    self._sync_progress.albums_completed = albums_scraped_successfully
                     # Record sync timestamp for this album
                     self._album_sync_times[album_name] = now
 
@@ -694,9 +846,14 @@ class CacheManager:
             if media_id not in self._media or force_full:
                 items_to_process += 1
 
+        # Stage 2: Downloading photos
         self._sync_progress.stage = "downloading"
+        self._sync_progress.current_stage = 2
+        self._sync_progress.stage_description = "Downloading photos"
         self._sync_progress.downloads_total = items_to_process
         self._sync_progress.downloads_done = 0
+        self._sync_progress.current_album_photos_done = 0
+        self._sync_progress.current_album_photos_total = items_to_process
 
         # Track URLs of newly downloaded photos for caption fetching (Google Photos only)
         new_photo_urls: Set[str] = set()
@@ -717,6 +874,18 @@ class CacheManager:
 
         with self._lock:
             for item in all_items:
+                # Check for stop request
+                if self._sync_stop_requested:
+                    logger.info("Sync stopped by user request")
+                    # Generate detailed stop message
+                    self._generate_stop_message(stats)
+                    self._sync_progress.is_syncing = False
+                    self._sync_progress.stage = "stopped"
+                    self._sync_progress.completed_at = datetime.now().isoformat()
+                    self._save_metadata()
+                    self.rebuild_playlist()
+                    return stats
+
                 media_id = self._get_media_id(item.url)
                 seen_urls.add(item.url)
                 source_type = item_source_types.get(item.url, "google_photos")
@@ -885,17 +1054,27 @@ class CacheManager:
             if urls_needing_captions:
                 logger.info(f"Fetching captions for {len(urls_needing_captions)} new photos...")
 
+        # Stage 3: Fetching metadata
+        self._sync_progress.current_stage = 3
+        if self._sync_progress.is_full_sync:
+            self._sync_progress.stage_description = "Refreshing all metadata"
+        else:
+            self._sync_progress.stage_description = "Fetching metadata for new photos"
+
         if urls_needing_captions and albums_scraped_successfully > 0:
-            self._sync_progress.stage = "fetching_captions"
+            self._sync_progress.stage = "fetching_metadata"
             self._sync_progress.downloads_done = 0
             self._sync_progress.downloads_total = len(urls_needing_captions)
+            self._sync_progress.current_album_photos_done = 0
+            self._sync_progress.current_album_photos_total = len(urls_needing_captions)
 
             # Counter for batched saves
             captions_since_save = [0]  # Use list to allow modification in nested function
 
-            # Callback to save Google caption, location, and date
+            # Callback to save Google caption, location, date, and raw texts
             # Note: Caption precedence is now applied at display time, not sync time
-            def on_caption_found(url: str, google_caption: Optional[str], google_location: Optional[str] = None, google_date: Optional[str] = None) -> None:
+            # Raw texts are stored for display-time classification (LLM-based)
+            def on_caption_found(url: str, google_caption: Optional[str], google_location: Optional[str] = None, google_date: Optional[str] = None, raw_texts: Optional[List[Dict[str, Any]]] = None) -> None:
                 media_id = self._get_media_id(url)
                 metadata_changed = False
                 with self._lock:
@@ -903,6 +1082,7 @@ class CacheManager:
                         return
 
                     # Store Google caption separately (not merged with embedded)
+                    # This is the legacy field - may be incorrect, classifier will fix at display time
                     if google_caption and google_caption != self._media[media_id].google_caption:
                         self._media[media_id].google_caption = google_caption
                         stats["captions_updated"] += 1
@@ -916,6 +1096,19 @@ class CacheManager:
                     # Store Google date (used as fallback when EXIF date is missing)
                     if google_date and google_date != self._media[media_id].google_date:
                         self._media[media_id].google_date = google_date
+                        metadata_changed = True
+
+                    # Store raw texts for display-time classification
+                    # This is the new field that enables LLM-based classification
+                    if raw_texts:
+                        # Add extraction timestamp to each text
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        for rt in raw_texts:
+                            if 'extraction_date' not in rt:
+                                rt['extraction_date'] = now_iso
+                        self._media[media_id].google_raw_texts = raw_texts
+                        # Clear any cached classifications when raw texts change
+                        self._media[media_id].google_text_classifications = None
                         metadata_changed = True
 
                     # Mark as fetched - we've tried to get Google metadata for this photo
@@ -1415,7 +1608,9 @@ class CacheManager:
     def get_cache_size_mb(self) -> float:
         """Get downloaded photos cache size in MB."""
         total = 0
-        for cached in self._media.values():
+        with self._lock:
+            media_items = list(self._media.values())
+        for cached in media_items:
             if os.path.exists(cached.local_path):
                 total += os.path.getsize(cached.local_path)
         return total / 1024 / 1024
@@ -1462,6 +1657,21 @@ class CacheManager:
                 self._media[media_id].location = location
                 self._save_metadata()
 
+    def update_classifications(self, media_id: str) -> None:
+        """
+        Persist updated classifications for a media item.
+
+        Called by display after background text classification completes.
+        The display has already updated the in-memory CachedMedia object,
+        we just need to save to disk.
+        """
+        with self._lock:
+            if media_id in self._media:
+                # The display has already updated google_text_classifications,
+                # google_caption, and google_location on the shared CachedMedia
+                self._save_metadata()
+                logger.debug(f"Persisted classifications for {media_id}")
+
     def reset_album_metadata(
         self,
         album_name: str,
@@ -1505,6 +1715,40 @@ class CacheManager:
 
         logger.info(f"Reset metadata for {count} photos in album '{album_name}' "
                     f"(captions={clear_captions}, locations={clear_locations})")
+        return count
+
+    def clear_text_classifications(self, album_name: Optional[str] = None) -> int:
+        """
+        Clear cached text classifications to trigger re-classification.
+
+        When a photo's classifications are cleared, it will be re-classified
+        (using Ollama LLM if available) the next time it's displayed.
+
+        Args:
+            album_name: If specified, only clear for this album. Otherwise, all albums.
+
+        Returns:
+            Number of photos affected.
+        """
+        count = 0
+        with self._lock:
+            for cached in self._media.values():
+                # Skip if album filter specified and doesn't match
+                if album_name and cached.album_source != album_name:
+                    continue
+
+                # Only count if there were classifications to clear
+                if cached.google_text_classifications is not None:
+                    cached.google_text_classifications = None
+                    count += 1
+
+            if count > 0:
+                self._save_metadata()
+
+        if album_name:
+            logger.info(f"Cleared text classifications for {count} photos in album '{album_name}'")
+        else:
+            logger.info(f"Cleared text classifications for {count} photos (all albums)")
         return count
 
     def get_album_names(self) -> List[str]:

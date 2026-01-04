@@ -304,6 +304,40 @@ def cmd_reset_album(args):
         print(f"Error: {result.get('error', 'Unknown error')}")
 
 
+def cmd_reclassify(args):
+    """Clear cached text classifications to trigger re-classification."""
+    album_name = args.album if hasattr(args, 'album') and args.album else None
+
+    # Confirm unless --yes flag
+    if not args.yes:
+        if album_name:
+            print(f"This will clear cached text classifications for album: {album_name}")
+        else:
+            print("This will clear cached text classifications for ALL photos")
+        print("Photos will be re-classified (using Ollama LLM if available) when next displayed.")
+        response = input("Continue? [y/N] ").strip().lower()
+        if response not in ('y', 'yes'):
+            print("Cancelled.")
+            sys.exit(0)
+
+    # Make the API call
+    data = {}
+    if album_name:
+        data["album"] = album_name
+
+    result = api_call("/api/reclassify", "POST", data)
+
+    if result.get("success"):
+        count = result.get("photos_cleared", 0)
+        if album_name:
+            print(f"Cleared classifications for {count} photos in '{album_name}'")
+        else:
+            print(f"Cleared classifications for {count} photos")
+        print("Photos will be re-classified when next displayed.")
+    else:
+        print(f"Error: {result.get('error', 'Unknown error')}")
+
+
 # ============================================================================
 # Update Command
 # ============================================================================
@@ -556,6 +590,22 @@ Environment:
         help="Skip confirmation prompt"
     )
 
+    # Reclassify
+    reclassify = subparsers.add_parser(
+        "reclassify",
+        help="Clear text classifications to trigger re-classification"
+    )
+    reclassify.add_argument(
+        "album",
+        nargs="?",
+        help="Album name (optional - if not specified, all albums)"
+    )
+    reclassify.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip confirmation prompt"
+    )
+
     # Update
     update_parser = subparsers.add_parser("update", help="Check for and apply updates")
     update_parser.add_argument(
@@ -584,6 +634,7 @@ Environment:
         "add-local": cmd_add_local,
         "photos": cmd_photos,
         "reset-album": cmd_reset_album,
+        "reclassify": cmd_reclassify,
         "update": cmd_update,
     }
 

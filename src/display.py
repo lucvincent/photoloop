@@ -192,6 +192,11 @@ class Display:
         self._paused_indicator_font = None
         self._init_feedback_fonts()
 
+        # Text classifier for Google Photos metadata (lazy initialized)
+        self._text_classifier = None
+        self._classification_in_progress: Optional[str] = None  # media_id being classified
+        self._classification_callback: Optional[Callable[[str], None]] = None
+
         # Verify display dimensions match native resolution
         # SDL2 on Wayland sometimes reports wrong initial size (e.g., 1080p on 4K display)
         self._refresh_display_dimensions()
@@ -399,6 +404,156 @@ class Display:
         thread = threading.Thread(target=do_geocode, daemon=True)
         thread.start()
 
+    def set_classification_callback(
+        self,
+        callback: Callable[[str], None]
+    ) -> None:
+        """
+        Set callback for persisting classification updates to cache.
+
+        Args:
+            callback: Function(media_id) to persist updated classifications.
+        """
+        self._classification_callback = callback
+
+    def _lazy_classify_if_needed(self) -> None:
+        """
+        Trigger background text classification for current photo if needed.
+
+        This is called after show_photo() sets _current_media. If the photo has
+        raw texts that need classification (or low-confidence migrated classifications),
+        we classify in a background thread using Ollama LLM.
+
+        The caption/location fields are updated based on classification results.
+        """
+        if not self._current_media:
+            return
+
+        media = self._current_media
+
+        # Skip if no raw texts to classify
+        if not media.google_raw_texts:
+            return
+
+        # Check if classification is needed
+        needs_classification = False
+        if not media.google_text_classifications:
+            needs_classification = True
+        else:
+            # Check if any classifications are from migration with low confidence
+            for text_data in media.google_raw_texts:
+                text = text_data.get("text", "")
+                classification = media.google_text_classifications.get(text, {})
+                if (classification.get("classified_by") == "migration" and
+                        classification.get("confidence", 0) < 0.8):
+                    needs_classification = True
+                    break
+
+        if not needs_classification:
+            return
+
+        # Skip if already classifying this photo
+        if self._classification_in_progress == media.media_id:
+            return
+
+        # Mark as in progress
+        self._classification_in_progress = media.media_id
+        media_id = media.media_id
+        raw_texts = media.google_raw_texts
+
+        def do_classify():
+            """Background thread to perform text classification."""
+            try:
+                # Lazy initialize classifier
+                if not self._text_classifier:
+                    from .text_classifier import TextClassifier
+                    cache_dir = getattr(self.config.cache, 'directory', None)
+                    tc_config = getattr(self.config, 'text_classifier', None)
+                    cache_classifications = tc_config.cache_classifications if tc_config else True
+                    self._text_classifier = TextClassifier(
+                        cache_dir=cache_dir,
+                        cache_classifications=cache_classifications
+                    )
+
+                # Classify all raw texts
+                texts = [rt.get("text", "") for rt in raw_texts if rt.get("text")]
+                if not texts:
+                    return
+
+                results = self._text_classifier.classify_batch(texts)
+
+                # Update current media if it's still being displayed
+                if (self._current_media and
+                        self._current_media.media_id == media_id):
+
+                    # Store classification results
+                    self._current_media.google_text_classifications = {
+                        text: {
+                            "classification": result.classification,
+                            "confidence": result.confidence,
+                            "classified_by": result.classified_by,
+                            "classified_date": result.classified_date
+                        }
+                        for text, result in results.items()
+                    }
+
+                    # Apply classifications to update google_caption/google_location
+                    self._apply_classifications(self._current_media)
+
+                    self._needs_redraw = True  # Trigger overlay update
+                    logger.info(f"Classified {len(texts)} texts for {media_id}")
+
+                # Persist to cache via callback
+                if self._classification_callback:
+                    self._classification_callback(media_id)
+
+            except Exception as e:
+                logger.warning(f"Text classification failed for {media_id}: {e}")
+            finally:
+                # Clear in-progress flag if still set to this media
+                if self._classification_in_progress == media_id:
+                    self._classification_in_progress = None
+
+        # Start background thread
+        thread = threading.Thread(target=do_classify, daemon=True)
+        thread.start()
+
+    def _apply_classifications(self, media: CachedMedia) -> None:
+        """
+        Apply text classifications to update google_caption and google_location.
+
+        Selects the best caption and location from classified texts.
+        """
+        if not media.google_text_classifications:
+            return
+
+        # Find best location (highest confidence location classification)
+        best_location = None
+        best_location_confidence = 0
+
+        # Find best caption (highest confidence caption classification)
+        best_caption = None
+        best_caption_confidence = 0
+
+        for text, data in media.google_text_classifications.items():
+            classification = data.get("classification", "unknown")
+            confidence = data.get("confidence", 0)
+
+            if classification == "location" and confidence > best_location_confidence:
+                best_location = text
+                best_location_confidence = confidence
+
+            elif classification == "caption" and confidence > best_caption_confidence:
+                best_caption = text
+                best_caption_confidence = confidence
+
+        # Update fields if we found better classifications
+        if best_location and best_location_confidence > 0.5:
+            media.google_location = best_location
+
+        if best_caption and best_caption_confidence > 0.5:
+            media.google_caption = best_caption
+
     def _pil_to_texture(self, pil_image: Image.Image) -> sdl2.Texture:
         """Convert PIL Image to SDL2 Texture (GPU-resident)."""
         if pil_image.mode != "RGB":
@@ -547,6 +702,9 @@ class Display:
         # Trigger lazy geocoding if photo has GPS but no location
         self._lazy_geocode_if_needed()
 
+        # Trigger lazy text classification if photo has raw texts needing classification
+        self._lazy_classify_if_needed()
+
     def show_preloaded_photo(
         self,
         media: CachedMedia,
@@ -599,6 +757,7 @@ class Display:
         self._kb_duration = self.config.display.photo_duration_seconds
         self._needs_redraw = True
         self._lazy_geocode_if_needed()
+        self._lazy_classify_if_needed()
 
     def _get_kb_frame(
         self,
@@ -864,8 +1023,11 @@ class Display:
         max_sources = getattr(overlay_cfg, 'max_caption_sources', 1)
         separator = getattr(overlay_cfg, 'caption_separator', " — ")
 
-        # Placeholder values to filter out
-        invalid_values = {'unknown location', 'add location', 'add a description'}
+        # Placeholder values and UI artifacts to filter out
+        invalid_values = {
+            'unknown location', 'add location', 'add a description',
+            'other',  # UI section header from Google Photos info panel
+        }
 
         # Camera info patterns to filter out (some cameras put this in description fields)
         camera_info_patterns = [

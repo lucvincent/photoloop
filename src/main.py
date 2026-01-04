@@ -152,6 +152,10 @@ class PhotoLoop:
                 self.display.set_location_update_callback(
                     self.cache_manager.update_location
                 )
+                # Set up classification callback for persisting Ollama classifications
+                self.display.set_classification_callback(
+                    self.cache_manager.update_classifications
+                )
                 # Set up metadata update callback so display refreshes when
                 # captions are fetched incrementally during sync
                 self.cache_manager.set_metadata_update_callback(
@@ -456,13 +460,18 @@ class PhotoLoop:
         self._start_web_server()
         self._start_sync_thread()
 
-        # Do initial sync if no cached media
+        # Do initial sync if no cached media (runs in background)
         if self.cache_manager.get_media_count()['total'] == 0:
-            logger.info("No cached media, performing initial sync...")
-            try:
-                self.cache_manager.sync()
-            except Exception as e:
-                logger.error(f"Initial sync failed: {e}")
+            logger.info("No cached media, starting initial sync in background...")
+
+            def do_initial_sync():
+                try:
+                    self.cache_manager.sync()
+                    logger.info("Initial sync completed")
+                except Exception as e:
+                    logger.error(f"Initial sync failed: {e}")
+
+            threading.Thread(target=do_initial_sync, daemon=True).start()
 
         self._running = True
         logger.info("PhotoLoop started successfully")

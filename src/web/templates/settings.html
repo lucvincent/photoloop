@@ -73,27 +73,65 @@
                 </div>
             </div>
 
-            <h3>Album Sync</h3>
+            <h2>Album Sync</h2>
             <p class="help-text" style="margin-bottom: 12px;">
                 Only enabled sources (marked "Show" in the Albums tab) will be synced.
             </p>
-            <div class="form-group" style="margin-bottom: 12px;">
+
+            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                <div class="form-group" style="flex: 1; min-width: 180px;">
+                    <label for="sync-interval">Automatic Sync Interval</label>
+                    <select id="sync-interval">
+                        <option value="0">Never (manual only)</option>
+                        <option value="60">Hourly</option>
+                        <option value="360">Every 6 hours</option>
+                        <option value="720">Every 12 hours</option>
+                        <option value="1440" selected>Daily (24 hours)</option>
+                        <option value="2880">Every 2 days</option>
+                        <option value="10080">Weekly</option>
+                    </select>
+                </div>
+
+                <div class="form-group" style="flex: 1; min-width: 140px;">
+                    <label for="sync-time">Automatic Sync Time</label>
+                    <input type="time" id="sync-time" value="03:00">
+                </div>
+            </div>
+
+            <div class="form-group">
                 <label class="checkbox-inline">
-                    <input type="checkbox" id="update-all-captions">
-                    Update all metadata from Google Photos
+                    <input type="checkbox" id="sync-on-start">
+                    Sync on service start
                 </label>
-                <p class="help-text" style="margin: 4px 0 0 26px;">
-                    Check this to re-fetch metadata for all photos (slower). Otherwise, only new photos get metadata.
+            </div>
+
+            <div class="form-group">
+                <label for="sync-max-dimension">Max Pixel Dimension of Downloaded Photos</label>
+                <input type="number" id="sync-max-dimension" min="0" max="8000" step="100" value="0" style="width: 120px;">
+                <p class="help-text" style="margin-top: 4px;">0 = full resolution. Set a value (e.g., 1920) to download smaller versions and save space. Does not apply to local photo albums.</p>
+            </div>
+
+            <button id="btn-save-sync" class="btn btn-primary" style="margin-bottom: 20px;">Save Sync Settings</button>
+
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border);">
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <button id="btn-sync" class="btn btn-primary">Sync Now</button>
+                    <button id="btn-full-sync" class="btn btn-primary">Full Sync Now</button>
+                    <button id="btn-stop-sync" class="btn btn-danger" disabled>Stop Sync</button>
+                </div>
+                <p class="help-text" style="margin-top: 8px;">
+                    Full Sync also re-fetches photo metadata for remote albums (slower). Otherwise, only new photos get metadata.
                 </p>
             </div>
-            <button id="btn-sync" class="btn btn-primary">Sync Now</button>
-            <div id="sync-progress" class="sync-progress-box">
-                <div id="sync-stage">Starting sync...</div>
-                <div id="sync-details"></div>
+
+            <div id="sync-progress" class="sync-progress-box" style="display: none;">
+                <div id="sync-stage-header" style="font-weight: 600; margin-bottom: 8px;">Stage 1 of 3: Scanning albums</div>
+                <div id="sync-album-info" style="color: var(--text-secondary); margin-bottom: 8px;"></div>
                 <div class="progress-bar-container">
                     <div id="sync-progress-bar"></div>
                 </div>
-                <div id="sync-progress-text"></div>
+                <div id="sync-progress-text" style="margin-top: 4px;"></div>
+                <div id="sync-stop-message" style="margin-top: 8px; color: var(--text-secondary); display: none;"></div>
             </div>
         </section>
 
@@ -887,62 +925,87 @@
             try {
                 const progress = await apiCall('/api/sync/status');
                 const progressDiv = document.getElementById('sync-progress');
-                const stageDiv = document.getElementById('sync-stage');
-                const detailsDiv = document.getElementById('sync-details');
+                const stageHeader = document.getElementById('sync-stage-header');
+                const albumInfo = document.getElementById('sync-album-info');
                 const progressBar = document.getElementById('sync-progress-bar');
                 const progressText = document.getElementById('sync-progress-text');
+                const stopMessage = document.getElementById('sync-stop-message');
                 const syncBtn = document.getElementById('btn-sync');
+                const fullSyncBtn = document.getElementById('btn-full-sync');
+                const stopBtn = document.getElementById('btn-stop-sync');
 
                 if (progress.is_syncing) {
                     progressDiv.style.display = 'block';
                     syncBtn.disabled = true;
+                    fullSyncBtn.disabled = true;
                     syncBtn.textContent = 'Syncing...';
+                    stopBtn.disabled = false;
+                    stopMessage.style.display = 'none';
+
+                    // Stage header: "Stage X of Y: Description"
+                    const stageNum = progress.current_stage || 1;
+                    const totalStages = progress.total_stages || 3;
+                    const stageDesc = progress.stage_description || 'Working...';
+                    stageHeader.textContent = `Stage ${stageNum} of ${totalStages}: ${stageDesc}`;
 
                     if (progress.stage === 'scraping') {
-                        stageDiv.textContent = `Scraping album: ${progress.album_name || 'Loading...'}`;
-                        detailsDiv.textContent = `Found ${progress.urls_found} photos so far...`;
+                        albumInfo.textContent = `Album ${progress.current_album_index || progress.albums_done + 1} of ${progress.albums_total}: ${progress.album_name || 'Loading...'}`;
                         // Indeterminate progress during scraping
                         progressBar.style.width = '100%';
                         progressBar.style.background = 'linear-gradient(90deg, #4CAF50 25%, #8BC34A 50%, #4CAF50 75%)';
                         progressBar.style.backgroundSize = '200% 100%';
                         progressBar.style.animation = 'shimmer 1.5s infinite';
-                        progressText.textContent = `Album ${progress.albums_done}/${progress.albums_total}`;
+                        progressText.textContent = `Found ${progress.urls_found} photos so far`;
                     } else if (progress.stage === 'downloading') {
-                        stageDiv.textContent = 'Downloading photos...';
                         const pct = progress.downloads_total > 0
                             ? Math.round((progress.downloads_done / progress.downloads_total) * 100)
                             : 0;
-                        detailsDiv.textContent = `${progress.downloads_done} of ${progress.downloads_total} new photos`;
+                        albumInfo.textContent = progress.downloads_total > 0
+                            ? `${progress.downloads_done} of ${progress.downloads_total} new photos`
+                            : 'No new photos to download';
                         progressBar.style.width = pct + '%';
                         progressBar.style.background = '#4CAF50';
                         progressBar.style.animation = 'none';
                         progressText.textContent = pct + '%';
-                    } else if (progress.stage === 'fetching_captions') {
-                        stageDiv.textContent = 'Fetching metadata from Google Photos...';
+                    } else if (progress.stage === 'fetching_metadata') {
                         const pct = progress.downloads_total > 0
                             ? Math.round((progress.downloads_done / progress.downloads_total) * 100)
                             : 0;
-                        detailsDiv.textContent = `${progress.downloads_done} of ${progress.downloads_total} photos`;
+                        albumInfo.textContent = progress.downloads_total > 0
+                            ? `${progress.downloads_done} of ${progress.downloads_total} photos`
+                            : 'No metadata to fetch';
                         progressBar.style.width = pct + '%';
                         progressBar.style.background = 'linear-gradient(90deg, var(--sage-primary), var(--sage-light))';
                         progressBar.style.animation = 'none';
                         progressText.textContent = pct + '%';
                     }
-                } else if (progress.stage === 'complete') {
-                    stageDiv.textContent = 'Sync complete!';
-                    detailsDiv.textContent = `Found ${progress.urls_found} photos total`;
+                } else if (progress.stage === 'complete' || progress.stage === 'stopped') {
+                    const isStopped = progress.stage === 'stopped';
+                    stageHeader.textContent = isStopped ? 'Sync stopped' : 'Sync complete!';
+                    albumInfo.textContent = `Found ${progress.urls_found} photos total`;
                     progressBar.style.width = '100%';
-                    progressBar.style.background = '#4CAF50';
+                    progressBar.style.background = isStopped ? 'var(--warning)' : '#4CAF50';
                     progressBar.style.animation = 'none';
-                    progressText.textContent = '100%';
-                    syncBtn.disabled = false;
-                    syncBtn.textContent = 'Sync Now';
+                    progressText.textContent = isStopped ? 'Stopped' : '100%';
 
-                    // Hide progress after 3 seconds
+                    // Show stop message if available
+                    if (isStopped && progress.stop_message) {
+                        stopMessage.textContent = `Saved: ${progress.stop_message}`;
+                        stopMessage.style.display = 'block';
+                    } else {
+                        stopMessage.style.display = 'none';
+                    }
+
+                    syncBtn.disabled = false;
+                    fullSyncBtn.disabled = false;
+                    syncBtn.textContent = 'Sync Now';
+                    stopBtn.disabled = true;
+
+                    // Hide progress after 5 seconds (longer for stopped to show message)
                     setTimeout(() => {
                         progressDiv.style.display = 'none';
                         loadStatus();
-                    }, 3000);
+                    }, isStopped ? 5000 : 3000);
 
                     // Stop polling
                     if (syncPollInterval) {
@@ -953,7 +1016,9 @@
                     // Idle state
                     progressDiv.style.display = 'none';
                     syncBtn.disabled = false;
+                    fullSyncBtn.disabled = false;
                     syncBtn.textContent = 'Sync Now';
+                    stopBtn.disabled = true;
                     if (syncPollInterval) {
                         clearInterval(syncPollInterval);
                         syncPollInterval = null;
@@ -964,29 +1029,72 @@
             }
         }
 
-        // Sync button
-        document.getElementById('btn-sync').addEventListener('click', async () => {
+        // Shared sync trigger function
+        async function triggerSync(fullSync) {
             const progressDiv = document.getElementById('sync-progress');
-            const stageDiv = document.getElementById('sync-stage');
-            const detailsDiv = document.getElementById('sync-details');
+            const stageHeader = document.getElementById('sync-stage-header');
+            const albumInfo = document.getElementById('sync-album-info');
             const progressBar = document.getElementById('sync-progress-bar');
-            const updateAllCaptions = document.getElementById('update-all-captions').checked;
+            const progressText = document.getElementById('sync-progress-text');
+            const stopMessage = document.getElementById('sync-stop-message');
+
+            // Pre-flight check: ensure at least one album is enabled
+            try {
+                const albums = await apiCall('/api/albums');
+                const enabledAlbums = albums.filter(a => a.enabled);
+                if (enabledAlbums.length === 0) {
+                    // Show error in progress box
+                    progressDiv.style.display = 'block';
+                    stageHeader.textContent = 'No albums enabled';
+                    albumInfo.textContent = 'Enable at least one album in the Albums tab, then try again.';
+                    progressBar.style.width = '0%';
+                    progressText.textContent = '';
+                    stopMessage.style.display = 'none';
+                    // Hide after 4 seconds
+                    setTimeout(() => {
+                        progressDiv.style.display = 'none';
+                    }, 4000);
+                    return;
+                }
+            } catch (e) {
+                console.error('Error checking albums:', e);
+                // Continue anyway - backend will handle it
+            }
 
             // Show progress immediately
             progressDiv.style.display = 'block';
-            stageDiv.textContent = 'Starting sync...';
-            detailsDiv.textContent = '';
+            stageHeader.textContent = fullSync ? 'Starting full sync...' : 'Starting sync...';
+            albumInfo.textContent = '';
             progressBar.style.width = '0%';
+            progressText.textContent = '';
+            stopMessage.style.display = 'none';
 
             document.getElementById('btn-sync').disabled = true;
+            document.getElementById('btn-full-sync').disabled = true;
             document.getElementById('btn-sync').textContent = 'Syncing...';
+            document.getElementById('btn-stop-sync').disabled = false;
 
-            await apiCall('/api/sync', 'POST', { update_all_captions: updateAllCaptions });
+            await apiCall('/api/sync', 'POST', { update_all_captions: fullSync });
 
             // Start polling for progress
             if (!syncPollInterval) {
                 syncPollInterval = setInterval(updateSyncProgress, 1000);
             }
+        }
+
+        // Sync button (quick sync - new photos only)
+        document.getElementById('btn-sync').addEventListener('click', () => triggerSync(false));
+
+        // Full Sync button (re-fetch all metadata)
+        document.getElementById('btn-full-sync').addEventListener('click', () => triggerSync(true));
+
+        // Stop sync button
+        document.getElementById('btn-stop-sync').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-stop-sync');
+            btn.disabled = true;
+            btn.textContent = 'Stopping...';
+            await apiCall('/api/sync/stop', 'POST');
+            // Let the polling update the UI
         });
 
         // Check sync status on page load and start polling if sync is in progress
@@ -1003,6 +1111,88 @@
             }
         }
         checkInitialSyncStatus();
+
+        // ========== Sync Settings ==========
+
+        // Store original sync settings for change detection
+        let syncSettingsOriginal = {};
+
+        async function loadSyncSettings() {
+            try {
+                const settings = await apiCall('/api/sync/settings', 'GET');
+                document.getElementById('sync-interval').value = settings.interval_minutes;
+                document.getElementById('sync-time').value = settings.sync_time || '03:00';
+                document.getElementById('sync-on-start').checked = settings.sync_on_start;
+                document.getElementById('sync-max-dimension').value = settings.max_dimension;
+
+                // Capture original values
+                syncSettingsOriginal = {
+                    interval_minutes: settings.interval_minutes,
+                    sync_time: settings.sync_time || '03:00',
+                    sync_on_start: settings.sync_on_start,
+                    max_dimension: settings.max_dimension
+                };
+                document.getElementById('btn-save-sync').disabled = true;
+            } catch (e) {
+                console.error('Error loading sync settings:', e);
+            }
+        }
+
+        function getSyncSettingsState() {
+            return {
+                interval_minutes: parseInt(document.getElementById('sync-interval').value),
+                sync_time: document.getElementById('sync-time').value,
+                sync_on_start: document.getElementById('sync-on-start').checked,
+                max_dimension: parseInt(document.getElementById('sync-max-dimension').value) || 0
+            };
+        }
+
+        function checkSyncSettingsChanges() {
+            const current = getSyncSettingsState();
+            const hasChanges = JSON.stringify(current) !== JSON.stringify(syncSettingsOriginal);
+            document.getElementById('btn-save-sync').disabled = !hasChanges;
+        }
+
+        // Track changes on sync settings inputs
+        ['sync-interval', 'sync-time', 'sync-on-start', 'sync-max-dimension'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('change', checkSyncSettingsChanges);
+                if (el.type === 'number' || el.type === 'time') {
+                    el.addEventListener('input', checkSyncSettingsChanges);
+                }
+            }
+        });
+
+        // Save sync settings
+        document.getElementById('btn-save-sync').addEventListener('click', async () => {
+            const btn = document.getElementById('btn-save-sync');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+
+            try {
+                const data = getSyncSettingsState();
+                const result = await apiCall('/api/sync/settings', 'POST', data);
+                if (result.success) {
+                    syncSettingsOriginal = data;
+                    btn.textContent = 'Saved!';
+                    setTimeout(() => {
+                        btn.textContent = 'Save Sync Settings';
+                    }, 1500);
+                } else {
+                    alert('Error: ' + (result.error || 'Unknown error'));
+                    btn.textContent = 'Save Sync Settings';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                alert('Error saving sync settings: ' + e);
+                btn.textContent = 'Save Sync Settings';
+                btn.disabled = false;
+            }
+        });
+
+        // Load sync settings on page load
+        loadSyncSettings();
 
         // Load photos
         async function loadPhotos() {

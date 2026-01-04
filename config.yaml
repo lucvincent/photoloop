@@ -55,7 +55,7 @@ web:
 # ------------------------------------------------------------
 # How often to check for new photos in albums.
 #
-# interval_minutes: How often to sync (1440 = daily, 0 = disabled)
+# interval_minutes: How often to sync (1440 = daily, 0 = manual only)
 # sync_time:        Time for first sync (24h format), then every interval
 # sync_on_start:    Sync immediately on service start
 # max_dimension:    Maximum image dimension (width or height) in pixels
@@ -63,6 +63,7 @@ web:
 #                   1920 = limit to 1920px on longest edge (saves bandwidth/storage)
 #
 # Sync behavior:
+# - If interval_minutes is 0, only manual syncs run (via dashboard or CLI)
 # - If sync_time is set, first scheduled sync happens at that time
 # - sync_on_start is independent of sync_time
 # - Only enabled albums (marked "Show" in Albums tab) are synced
@@ -71,9 +72,10 @@ web:
 # - Sync daily at 3am: sync_time: "03:00", interval_minutes: 1440
 # - Sync hourly starting at midnight: sync_time: "00:00", interval_minutes: 60
 # - Sync every 6 hours from service start: omit sync_time, interval_minutes: 360
+# - Manual sync only: interval_minutes: 0
 #
 sync:
-  interval_minutes: 1440
+  interval_minutes: 1440               # 0 = manual only, 1440 = daily, etc.
   sync_time: "03:00"
   sync_on_start: false
   max_dimension: 0                     # 0 = full resolution, or max pixels (e.g., 1920)
@@ -316,6 +318,36 @@ overlay:
     exif_location: 4
   max_caption_sources: 1               # How many sources to combine
   caption_separator: " — "             # Between combined sources
+
+# --------------------------------------
+# Text Classification
+# --------------------------------------
+# Classifies Google Photos DOM text (captions vs locations vs camera info)
+# using pattern-based heuristics at display time.
+#
+# ARCHITECTURE: "Dumb scraper, smart display"
+#   1. Scraper extracts ALL text from Google Photos without classifying
+#   2. Raw text stored in google_raw_texts field (survives re-scraping)
+#   3. At display time, heuristics classify text as:
+#      - location: Geographic places ("Barcelona, Spain", "Wyoming")
+#      - caption: User descriptions ("Family dinner at grandma's")
+#      - camera_info: Device/settings ("RICOH IMAGING COMPANY", "ISO 400")
+#      - ui_artifact: Google UI text ("Add description", "Details")
+#   4. Results cached to disk - classification runs once per unique text
+#
+# WHY HEURISTICS: We tested Ollama/tinyllama LLM but it performed poorly
+# (classified everything as "location"). Heuristics are instant, accurate,
+# and require no additional dependencies or RAM.
+#
+# CLI: Use `photoloop reclassify` to clear cached classifications and
+# force re-classification on next display (useful if heuristics are updated).
+#
+# FUTURE: The caching infrastructure supports more expensive classifiers
+# (e.g., web API) if better accuracy is needed later.
+#
+text_classifier:
+  enabled: true                        # Enable classification at display time
+  cache_classifications: true          # Cache results to disk (recommended)
 
 
 # ############################################################

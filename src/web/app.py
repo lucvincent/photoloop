@@ -326,6 +326,28 @@ def create_app(
             logger.error(f"Error resetting album metadata: {e}")
             return jsonify({"error": str(e)}), 500
 
+    @app.route('/api/reclassify', methods=['POST'])
+    def api_reclassify():
+        """Clear cached text classifications to trigger re-classification."""
+        try:
+            if not app.cache_manager:
+                return jsonify({"error": "Cache manager not available"}), 503
+
+            data = request.get_json() or {}
+            album_name = data.get('album')  # Optional - if not specified, all albums
+
+            count = app.cache_manager.clear_text_classifications(album_name)
+
+            return jsonify({
+                "success": True,
+                "album": album_name,
+                "photos_cleared": count
+            })
+
+        except Exception as e:
+            logger.error(f"Error clearing text classifications: {e}")
+            return jsonify({"error": str(e)}), 500
+
     @app.route('/api/local-albums/config', methods=['GET'])
     def api_local_albums_config():
         """Get local albums configuration."""
@@ -445,6 +467,65 @@ def create_app(
                 "stage": "idle",
                 "error_message": "Cache manager not available"
             })
+
+    @app.route('/api/sync/stop', methods=['POST'])
+    def api_sync_stop():
+        """Request to stop an ongoing sync."""
+        if app.cache_manager:
+            stopped = app.cache_manager.stop_sync()
+            if stopped:
+                return jsonify({"success": True, "message": "Sync stop requested"})
+            else:
+                return jsonify({"success": False, "message": "No sync in progress"})
+        else:
+            return jsonify({"error": "Cache manager not available"}), 503
+
+    @app.route('/api/sync/settings', methods=['GET'])
+    def api_get_sync_settings():
+        """Get sync settings."""
+        sync = app.photoloop_config.sync
+        return jsonify({
+            "interval_minutes": sync.interval_minutes,
+            "sync_time": sync.sync_time,
+            "sync_on_start": sync.sync_on_start,
+            "max_dimension": sync.max_dimension
+        })
+
+    @app.route('/api/sync/settings', methods=['POST'])
+    def api_save_sync_settings():
+        """Save sync settings."""
+        try:
+            data = request.get_json()
+            if data is None:
+                return jsonify({"error": "No data provided"}), 400
+
+            config_path = app.photoloop_config.config_path
+            if not config_path:
+                return jsonify({"error": "No config path"}), 500
+
+            sync_updates = {}
+
+            if 'interval_minutes' in data:
+                sync_updates['interval_minutes'] = int(data['interval_minutes'])
+            if 'sync_time' in data:
+                sync_updates['sync_time'] = data['sync_time'] if data['sync_time'] else None
+            if 'sync_on_start' in data:
+                sync_updates['sync_on_start'] = bool(data['sync_on_start'])
+            if 'max_dimension' in data:
+                sync_updates['max_dimension'] = int(data['max_dimension'])
+
+            if sync_updates:
+                save_config_partial(config_path, {'sync': sync_updates})
+
+            # Notify of config change
+            if app.on_config_change:
+                app.on_config_change()
+
+            return jsonify({"success": True})
+
+        except Exception as e:
+            logger.error(f"Error saving sync settings: {e}")
+            return jsonify({"error": str(e)}), 500
 
     @app.route('/api/extract-locations', methods=['POST'])
     def api_extract_locations():

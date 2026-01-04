@@ -281,6 +281,84 @@ restart PhotoLoop to hide the cursor again.
 - Caption precedence configurable: google_photos or embedded
 - Reverse geocoding for location names from GPS coordinates
 
+### Text Classification (text_classifier.py)
+
+Classifies Google Photos DOM text (captions vs locations vs camera info) using
+pattern-based heuristics at display time.
+
+**Architecture: "Dumb Scraper, Smart Display"**
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  album_scraper  │────▶│  cache_manager   │────▶│    display.py   │
+│                 │     │                  │     │                 │
+│ Extract ALL     │     │ google_raw_texts │     │ Classify text   │
+│ text from DOM   │     │ (list of texts)  │     │ using heuristics│
+│ without         │     │                  │     │                 │
+│ classifying     │     │ google_text_     │◀────│ Cache results   │
+│                 │     │ classifications  │     │                 │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+```
+
+1. **Scrape time**: `album_scraper.py` extracts ALL text from Google Photos DOM
+   - No classification during scraping (avoids misclassification issues)
+   - Raw text stored in `google_raw_texts` field with source context
+   - Survives re-scraping - only new text is added
+
+2. **Display time**: `display.py` → `text_classifier.py`
+   - When photo is displayed, raw texts are classified
+   - Background thread prevents blocking the slideshow
+   - Results stored in `google_text_classifications` field
+
+3. **Caching**: Classifications cached to `text_classifications.json`
+   - Cache key: MD5 hash of lowercase text
+   - Same text always gets same classification (deterministic)
+   - Persists across restarts - classification runs once per unique text
+
+**Why Heuristics (Not LLM)**
+
+We tested Ollama with tinyllama model but it performed poorly:
+- Classified everything as "location" regardless of content (2/8 correct)
+- Slow (~2-3 seconds per classification on Pi 4)
+- Required 1GB+ RAM for model
+
+Heuristics are:
+- Fast (<1ms per classification)
+- Accurate (8/8 correct on test cases)
+- Deterministic (same input → same output)
+- No dependencies (just regex patterns)
+
+**Classification Types:**
+- **camera_info**: Device names (RICOH, Canon, Nikon), settings (ISO, aperture), filenames
+- **location**: Country suffixes (", France"), geographic terms (street, plaza), admin regions
+- **ui_artifact**: Placeholder text ("Add description", "Details", "Other")
+- **date**: Various date formats (Jan 15, 2024; 2024-01-15; Monday)
+- **caption**: Everything else (default for user-written descriptions)
+
+**Config options:**
+```yaml
+text_classifier:
+  enabled: true                    # Enable classification at display time
+  cache_classifications: true      # Cache results to disk (recommended)
+```
+
+Both settings default to True. Disabling is rarely needed since heuristics
+are instant and deterministic.
+
+**CLI commands:**
+```bash
+# Clear cached classifications (triggers re-classification on next display)
+photoloop reclassify                    # All photos
+photoloop reclassify "Album Name"       # Specific album
+photoloop reclassify -y                 # Skip confirmation
+```
+
+**Key files:**
+- `src/text_classifier.py`: Heuristics-based classifier with detailed architecture docs
+- `src/display.py`: `_lazy_classify_if_needed()`, `_apply_classifications()`
+- `src/cache_manager.py`: `google_raw_texts`, `google_text_classifications` fields
+- `src/album_scraper.py`: `_extract_info_from_detail_view()` raw text extraction
+
 ### Video Playback (video_player.py)
 - Uses ffpyplayer for hardware-accelerated video decode
 - Integrates with SDL2 display renderer
@@ -304,6 +382,7 @@ photoloop albums              # List configured albums
 photoloop add-album URL       # Add a new album
 photoloop photos              # List cached photos
 photoloop reset-album NAME    # Reset metadata for an album
+photoloop reclassify          # Re-classify all text metadata
 photoloop update --check      # Check for available updates
 photoloop update              # Apply available updates
 
@@ -656,3 +735,17 @@ python -c "from src.face_detector import FaceDetector; fd = FaceDetector(); prin
 ### Web UI
 - Replace Previous/Next button icons (⏮/⏭) with custom SVG single-arrow-with-bar icons
   for a cleaner look. Unicode doesn't have polished single-arrow versions.
+
+### Text Classification
+- **Web API classifier**: The caching infrastructure supports expensive classifiers.
+  If better accuracy is needed, could add a web API classifier (async, like reverse geocoder)
+  that runs in background and updates cache. Current heuristics are 8/8 on test cases though.
+- **Additional heuristics**: Add more patterns as edge cases are discovered:
+  - More camera manufacturers (Hasselblad, Phase One, etc.)
+  - More geographic terms in other languages
+  - Better handling of ambiguous single words (e.g., "Lodeve" - city or caption?)
+- **Migration improvements**: Current migration from legacy google_caption/google_location
+  sets low confidence (0.5) to encourage re-classification. Could improve by analyzing
+  the text content to set more accurate confidence scores.
+- **Statistics/debugging**: Add web UI panel to view classification stats and
+  manually override misclassified texts.

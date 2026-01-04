@@ -738,33 +738,37 @@ class AlbumScraper:
                         container.click()
                         time.sleep(2)
 
-                        # Extract caption, location, and date
+                        # Extract caption, location, date, and raw texts
                         info = self._extract_info_from_detail_view(driver)
                         caption = info.get('caption')
                         location = info.get('location')
                         google_date = info.get('date')
+                        raw_texts = info.get('raw_texts', [])
                         captions[base_url] = caption
                         total_found += 1
 
                         # Log progress every photo for debugging
                         if total_found <= 10 or total_found % 50 == 0:
-                            logger.info(f"Processed photo {total_found}: caption={'yes' if caption else 'no'}, location={'yes' if location else 'no'}, date={'yes' if google_date else 'no'}")
+                            logger.info(f"Processed photo {total_found}: caption={'yes' if caption else 'no'}, location={'yes' if location else 'no'}, date={'yes' if google_date else 'no'}, raw_texts={len(raw_texts)}")
 
                         if caption:
                             logger.info(f"Caption found: {caption[:60]}...")
                         if location:
                             logger.info(f"Location found: {location}")
 
-                        # Call callback to save caption, location, and date immediately
+                        # Call callback to save caption, location, date, and raw texts immediately
                         if caption_found_callback:
                             try:
-                                caption_found_callback(base_url, caption, location, google_date)
+                                caption_found_callback(base_url, caption, location, google_date, raw_texts)
                             except TypeError:
-                                # Backwards compatibility: old callback signature without date/location
+                                # Backwards compatibility: old callback signature without raw_texts
                                 try:
-                                    caption_found_callback(base_url, caption, location)
+                                    caption_found_callback(base_url, caption, location, google_date)
                                 except TypeError:
-                                    caption_found_callback(base_url, caption)
+                                    try:
+                                        caption_found_callback(base_url, caption, location)
+                                    except TypeError:
+                                        caption_found_callback(base_url, caption)
                             except Exception as e:
                                 logger.warning(f"Error in caption callback: {e}")
 
@@ -840,27 +844,30 @@ class AlbumScraper:
 
     def _extract_info_from_detail_view(self, driver: webdriver.Chrome) -> dict:
         """
-        Extract caption, location, and date from the photo detail view.
+        Extract metadata from the photo detail view.
 
-        Uses a ROBUST CONTENT-BASED approach that doesn't rely on fragile CSS
-        class names. Instead of looking for specific classes like 'div.oBMhZb',
-        we gather all text from the info panel and identify each piece by its
-        content pattern:
-        - Date: Text matching date patterns (e.g., "Jan 15, 2024")
-        - Location: Text from location UI area, or geographic-looking text
-        - Caption: User text that isn't metadata, dates, locations, or UI labels
+        Uses a DUMB SCRAPER approach: extracts ALL text from the info panel
+        without trying to classify it. Classification is deferred to display time
+        where we can use more sophisticated logic (including LLM-based classification).
 
-        This approach is resilient to Google Photos DOM structure changes.
+        The raw texts are stored with source context so the classifier can use
+        that information. For backward compatibility, we still populate the
+        'caption', 'location', and 'date' fields using simple reliable heuristics:
+        - date: Pattern matching (reliable)
+        - location: From aria-label="Edit location" area only (reliable)
+        - caption: First non-date, non-location text (may be wrong - classifier will fix)
 
         Args:
             driver: WebDriver with photo detail view open.
 
         Returns:
-            Dict with 'caption', 'location', and 'date' keys (values may be None).
+            Dict with:
+            - 'caption', 'location', 'date': Legacy fields (may be None)
+            - 'raw_texts': List of dicts with 'text' and 'source' keys
         """
         import re
         from datetime import datetime
-        result = {'caption': None, 'location': None, 'date': None}
+        result = {'caption': None, 'location': None, 'date': None, 'raw_texts': []}
 
         try:
             from selenium.webdriver.common.action_chains import ActionChains
@@ -956,6 +963,7 @@ class AlbumScraper:
                 r'^Unknown location$',       # Placeholder
                 r'^Details$',                # UI label
                 r'^Info$',                   # UI label
+                r'^Other$',                  # UI section header
                 # Camera/device names (shown in info panel)
                 r'^Google Pixel',            # Google phones
                 r'^Pixel \d',                # Pixel phones
@@ -1003,68 +1011,63 @@ class AlbumScraper:
                 return None
 
             # =================================================================
-            # STEP 3: Categorize each text piece by content
+            # STEP 3: Collect ALL texts with source context (DUMB SCRAPER)
             # =================================================================
-            potential_locations = []
-            potential_captions = []
+            # Store all non-metadata texts - classification happens at display time
+            raw_texts = []
+            potential_captions = []  # For backward-compatible caption field
 
             for text in all_texts:
                 text = text.strip()
                 if not text or len(text) < 2:
                     continue
 
-                # Skip pure metadata
+                # Skip pure metadata/UI text
                 if is_metadata_or_ui(text):
                     continue
 
+                # Determine source context for the text
+                is_from_location_area = (text == location_from_aria)
+
                 # Check if it's a date
-                if not result['date']:
-                    date_val = extract_date(text)
-                    if date_val:
+                date_val = extract_date(text)
+                if date_val:
+                    # Store the raw date text
+                    raw_texts.append({
+                        'text': text,
+                        'source': 'date_area',
+                        'parsed_date': date_val
+                    })
+                    # Also set legacy field (first date wins)
+                    if not result['date']:
                         result['date'] = date_val
                         logger.debug(f"Found date: {result['date']}")
-                        continue  # Don't also use as caption
+                    continue
 
-                # Remaining text could be location or caption
-                # Location hints: short, looks geographic, came from location area
-                is_likely_location = (
-                    len(text) < 50 and
-                    not '\n' in text and
-                    (text == location_from_aria or
-                     # Geographic patterns: "City, State" or "City, Country"
-                     re.match(r'^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]', text) or
-                     # US state abbreviations
-                     re.search(r',\s*[A-Z]{2}$', text) or
-                     # Country/region names
-                     text in ['New Mexico', 'California', 'Colorado', 'Arizona', 'Utah',
-                             'New York', 'Texas', 'Florida', 'France', 'Italy', 'Spain',
-                             'Germany', 'Japan', 'Mexico', 'Canada', 'Australia'])
-                )
+                # Store non-date text with source context
+                source = 'location_area' if is_from_location_area else 'info_panel'
+                raw_texts.append({
+                    'text': text,
+                    'source': source
+                })
 
-                if is_likely_location:
-                    potential_locations.append(text)
-                else:
+                # Track non-location texts for backward-compatible caption
+                if not is_from_location_area:
                     potential_captions.append(text)
 
-            # =================================================================
-            # STEP 4: Select best location and caption
-            # =================================================================
+            result['raw_texts'] = raw_texts
 
-            # Prefer location from aria-label area, then other candidates
+            # =================================================================
+            # STEP 4: Populate legacy fields (backward compatibility)
+            # =================================================================
+            # Location: ONLY from aria-label area (most reliable, no heuristics)
             if location_from_aria and location_from_aria.lower() not in ['add location', 'unknown location']:
                 result['location'] = location_from_aria
-            elif potential_locations:
-                # Prefer more specific locations (longer usually means more specific)
-                result['location'] = max(potential_locations, key=len)
-
-            if result['location']:
                 logger.debug(f"Found location: {result['location']}")
 
-            # For caption, prefer longer text (more likely to be real description)
-            # Filter out anything that matches the location
+            # Caption: First non-date text from info panel (not location area)
+            # This may be wrong - the text_classifier will fix it at display time
             for text in sorted(potential_captions, key=len, reverse=True):
-                if result['location'] and text == result['location']:
-                    continue
                 if len(text) < 5:
                     continue
                 # Skip if contains metadata lines
@@ -1073,9 +1076,10 @@ class AlbumScraper:
                     if any(is_metadata_or_ui(l) for l in lines):
                         continue
                 result['caption'] = text
-                logger.debug(f"Found caption: {result['caption'][:50]}...")
+                logger.debug(f"Found caption (legacy): {result['caption'][:50]}...")
                 break
 
+            logger.debug(f"Extracted {len(raw_texts)} raw texts for classification")
             return result
 
         except Exception as e:

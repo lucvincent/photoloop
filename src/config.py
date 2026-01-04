@@ -48,7 +48,7 @@ class AlbumConfig:
 @dataclass
 class SyncConfig:
     """Sync settings."""
-    interval_minutes: int = 1440  # Default: 24 hours
+    interval_minutes: int = 1440  # Default: 24 hours (0 = automatic sync disabled)
     sync_on_start: bool = False  # Whether to sync immediately on service start
     sync_time: Optional[str] = None  # Time of day for first sync (HH:MM format, e.g., "03:00")
     max_dimension: int = 0  # 0 = full resolution, otherwise max width/height in pixels
@@ -344,6 +344,15 @@ class NewsConfig:
 
 
 @dataclass
+class TextClassifierConfig:
+    """Configuration for heuristics-based text classification (caption vs location)."""
+    # Enable text classification at display time
+    enabled: bool = True
+    # Cache classification results to disk
+    cache_classifications: bool = True
+
+
+@dataclass
 class PhotoLoopConfig:
     """Main configuration class."""
     albums: List[AlbumConfig] = field(default_factory=list)
@@ -360,6 +369,7 @@ class PhotoLoopConfig:
     clock: ClockConfig = field(default_factory=ClockConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
     news: NewsConfig = field(default_factory=NewsConfig)
+    text_classifier: TextClassifierConfig = field(default_factory=TextClassifierConfig)
 
     # Runtime state (not persisted)
     config_path: Optional[str] = None
@@ -469,6 +479,7 @@ def load_config(config_path: Optional[str] = None) -> PhotoLoopConfig:
         clock=_dict_to_dataclass(config_data.get('clock'), ClockConfig),
         weather=_dict_to_dataclass(config_data.get('weather'), WeatherConfig),
         news=_dict_to_dataclass(config_data.get('news'), NewsConfig),
+        text_classifier=_dict_to_dataclass(config_data.get('text_classifier'), TextClassifierConfig),
         config_path=found_path,
     )
 
