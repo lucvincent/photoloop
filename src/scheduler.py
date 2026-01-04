@@ -430,7 +430,9 @@ class Scheduler:
 
     def get_next_transition(self, now: Optional[datetime] = None) -> Optional[Tuple[datetime, str]]:
         """
-        Get the next scheduled transition time.
+        Get the next scheduled transition time where the mode actually changes.
+
+        Skips transitions where the mode stays the same (e.g., black → black at midnight).
 
         Args:
             now: Current datetime.
@@ -452,50 +454,64 @@ class Scheduler:
             mode = self.get_display_mode(now)
             return (self._override_expires, f"override expires (resume schedule)")
 
-        # Find current event and next event
+        # Find current event
         current_event = self._get_current_event(now)
         if not current_event:
             return None
 
-        # Find when current event ends
-        end = self._parse_time(current_event.end_time)
-        if current_event.end_time == "24:00":
-            # Event ends at midnight - next transition is tomorrow
-            tomorrow = now + timedelta(days=1)
-            tomorrow_events = self._get_events_for_day(tomorrow)
-            if tomorrow_events:
-                first_event = tomorrow_events[0]
-                first_start = self._parse_time(first_event.start_time)
-                next_dt = tomorrow.replace(
-                    hour=first_start.hour,
-                    minute=first_start.minute,
+        current_mode = current_event.mode
+
+        # Find current event index in today's events
+        events_today = self._get_events_for_day(now)
+        current_idx = None
+        for i, event in enumerate(events_today):
+            if event.start_time == current_event.start_time:
+                current_idx = i
+                break
+
+        if current_idx is None:
+            return None
+
+        # Look at remaining events today
+        for i in range(current_idx + 1, len(events_today)):
+            event = events_today[i]
+            if event.mode != current_mode:
+                start = self._parse_time(event.start_time)
+                next_dt = now.replace(
+                    hour=start.hour,
+                    minute=start.minute,
                     second=0,
                     microsecond=0
                 )
-                return (next_dt, f"switch to {first_event.mode}")
-            return None
+                return (next_dt, f"switch to {event.mode}")
 
+        # Look up to 7 days ahead for next mode change
+        # (handles cases like weekdays all black, weekends have slideshow)
+        for days_ahead in range(1, 8):
+            future_day = now + timedelta(days=days_ahead)
+            future_events = self._get_events_for_day(future_day)
+            for event in future_events:
+                if event.mode != current_mode:
+                    start = self._parse_time(event.start_time)
+                    next_dt = future_day.replace(
+                        hour=start.hour,
+                        minute=start.minute,
+                        second=0,
+                        microsecond=0
+                    )
+                    return (next_dt, f"switch to {event.mode}")
+
+        # No mode change found (all events have same mode) - return end of current event
+        end = self._parse_time(current_event.end_time)
+        if current_event.end_time == "24:00":
+            return None  # No actual transition
         next_dt = now.replace(
             hour=end.hour,
             minute=end.minute,
             second=0,
             microsecond=0
         )
-
-        # Find what the next mode will be
-        events = self._get_events_for_day(now)
-        current_idx = None
-        for i, event in enumerate(events):
-            if event.start_time == current_event.start_time:
-                current_idx = i
-                break
-
-        if current_idx is not None and current_idx + 1 < len(events):
-            next_event = events[current_idx + 1]
-            return (next_dt, f"switch to {next_event.mode}")
-        else:
-            # Wrapping to tomorrow
-            return (next_dt, "end of day schedule")
+        return (next_dt, "end of day schedule")
 
     def get_today_schedule(self, now: Optional[datetime] = None) -> dict:
         """

@@ -375,6 +375,33 @@ class PhotoLoopConfig:
     config_path: Optional[str] = None
 
 
+def _repair_time_value(value: Any, field_name: str) -> str:
+    """
+    Repair a potentially corrupted time value.
+
+    YAML interprets unquoted HH:MM as sexagesimal (base-60) numbers:
+    - "08:00" → 480 (8*60 + 0)
+    - "17:00" → 1020 (17*60 + 0)
+    - "21:00" → 1260 (21*60 + 0)
+    - "24:00" → 1440 (24*60 + 0)
+
+    This function detects integer values and converts them back to HH:MM format.
+    """
+    if isinstance(value, int):
+        # Sexagesimal integer - convert back to HH:MM
+        hours = value // 60
+        minutes = value % 60
+        repaired = f"{hours:02d}:{minutes:02d}"
+        logger.warning(f"Repaired corrupted time value in '{field_name}': {value} → '{repaired}'")
+        return repaired
+    elif isinstance(value, str):
+        return value
+    else:
+        # Unknown type - return as string
+        logger.warning(f"Unexpected type for time field '{field_name}': {type(value).__name__}")
+        return str(value)
+
+
 def _dict_to_dataclass(data: Dict[str, Any], cls: type) -> Any:
     """Convert a dictionary to a dataclass instance, handling nested dataclasses."""
     if data is None:
@@ -391,19 +418,39 @@ def _dict_to_dataclass(data: Dict[str, Any], cls: type) -> Any:
 
         # Handle nested dataclasses
         if hasattr(field_type, '__dataclass_fields__'):
+            # Special handling for ScheduleTimeConfig to repair corrupted times
+            if field_type == ScheduleTimeConfig and isinstance(value, dict):
+                if 'start_time' in value:
+                    value['start_time'] = _repair_time_value(value['start_time'], 'start_time')
+                if 'end_time' in value:
+                    value['end_time'] = _repair_time_value(value['end_time'], 'end_time')
             kwargs[key] = _dict_to_dataclass(value, field_type)
         # Handle Dict[str, ScheduleTimeConfig] for overrides
         elif key == 'overrides' and isinstance(value, dict):
-            kwargs[key] = {
-                k: _dict_to_dataclass(v, ScheduleTimeConfig)
-                for k, v in value.items()
-            }
+            overrides = {}
+            for k, v in value.items():
+                if isinstance(v, dict):
+                    # Repair any corrupted time values
+                    if 'start_time' in v:
+                        v['start_time'] = _repair_time_value(v['start_time'], 'start_time')
+                    if 'end_time' in v:
+                        v['end_time'] = _repair_time_value(v['end_time'], 'end_time')
+                overrides[k] = _dict_to_dataclass(v, ScheduleTimeConfig)
+            kwargs[key] = overrides
         # Handle List[ScheduleEvent] for weekday_events and weekend_events
         elif key in ('weekday_events', 'weekend_events') and isinstance(value, list):
-            kwargs[key] = [
-                _dict_to_dataclass(v, ScheduleEvent) if isinstance(v, dict) else v
-                for v in value
-            ]
+            events = []
+            for v in value:
+                if isinstance(v, dict):
+                    # Repair any corrupted time values before creating ScheduleEvent
+                    if 'start_time' in v:
+                        v['start_time'] = _repair_time_value(v['start_time'], 'start_time')
+                    if 'end_time' in v:
+                        v['end_time'] = _repair_time_value(v['end_time'], 'end_time')
+                    events.append(_dict_to_dataclass(v, ScheduleEvent))
+                else:
+                    events.append(v)
+            kwargs[key] = events
         # Handle HolidayConfig
         elif key == 'holidays' and isinstance(value, dict):
             kwargs[key] = _dict_to_dataclass(value, HolidayConfig)
@@ -513,6 +560,10 @@ def save_config(config: PhotoLoopConfig, config_path: Optional[str] = None) -> s
 
     # Convert to dict for YAML serialization
     new_data = config_to_dict(config)
+
+    # Quote time strings to prevent YAML sexagesimal interpretation on reload
+    # Without this, "17:00" gets saved unquoted and parsed as 1020 on next load
+    new_data = _quote_time_strings(new_data)
 
     if RUAMEL_AVAILABLE and os.path.exists(config_path):
         # Use ruamel.yaml to preserve comments
