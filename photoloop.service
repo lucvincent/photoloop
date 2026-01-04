@@ -6,9 +6,9 @@ After=network.target graphical.target
 Wants=graphical.target
 
 [Service]
-Type=simple
-User=pi
-Group=pi
+Type=notify
+User=luc
+Group=luc
 
 # Working directory
 WorkingDirectory=/opt/photoloop
@@ -26,7 +26,10 @@ ExecStart=/opt/photoloop/venv/bin/python -m photoloop.src.main -c /etc/photoloop
 
 # Restart policy
 Restart=on-failure
-RestartSec=10
+RestartSec=5
+
+# Watchdog: systemd restarts service if no WATCHDOG=1 within 60s
+WatchdogSec=60
 
 # Logging
 StandardOutput=journal

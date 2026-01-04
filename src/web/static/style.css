@@ -415,6 +415,88 @@ input[type="checkbox"] {
     background: linear-gradient(135deg, #7aaaa0, #6a9a90);
 }
 
+/* Mode selection buttons */
+.mode-buttons {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+.btn-mode {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 18px;
+    background: var(--bg-dark);
+    border: 2px solid var(--bg-light);
+    color: var(--text-secondary);
+    min-width: 120px;
+    transition: all 0.2s;
+}
+
+.btn-mode:hover {
+    background: var(--bg-light);
+    border-color: var(--sage-primary);
+    color: var(--text-primary);
+}
+
+.btn-mode.active {
+    background: linear-gradient(135deg, var(--sage-primary), var(--sage-dark));
+    border-color: var(--sage-light);
+    color: white;
+    box-shadow: 0 2px 8px rgba(122, 153, 104, 0.3);
+}
+
+.btn-mode .mode-icon {
+    font-size: 1.1em;
+    line-height: 1;
+}
+
+.btn-mode .mode-text {
+    display: inline;
+}
+
+.btn-mode.btn-resume {
+    background: var(--bg-dark);
+    border-style: dashed;
+}
+
+.btn-mode.btn-resume:hover {
+    background: var(--bg-medium);
+    border-color: var(--info);
+}
+
+/* Mode reason subtitle */
+.mode-reason {
+    display: inline-block;
+    font-size: 0.75em;
+    font-weight: normal;
+    color: var(--text-muted);
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+/* Additional status badge colors */
+.status-badge.clock {
+    background: linear-gradient(135deg, var(--info), #5a8a80);
+    color: white;
+    box-shadow: 0 2px 8px rgba(106, 154, 144, 0.3);
+}
+
+.status-badge.off {
+    background: linear-gradient(135deg, #555, #444);
+    color: var(--text-muted);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.status-badge.no-content {
+    background: linear-gradient(135deg, var(--danger), var(--danger-hover));
+    color: white;
+    box-shadow: 0 2px 8px rgba(168, 104, 88, 0.3);
+}
+
 #btn-next {
     background: linear-gradient(135deg, var(--sage-primary), var(--sage-dark));
 }
@@ -963,6 +1045,30 @@ input[type="checkbox"] {
     .btn {
         padding: 10px 18px;
         font-size: 0.9em;
+    }
+
+    /* Mode buttons - icons only on mobile */
+    .mode-buttons {
+        gap: 8px;
+    }
+
+    .btn-mode {
+        min-width: 50px;
+        padding: 10px 14px;
+    }
+
+    .btn-mode .mode-text {
+        display: none;
+    }
+
+    .btn-mode .mode-icon {
+        font-size: 1.3em;
+    }
+
+    .mode-reason {
+        display: block;
+        margin-left: 0;
+        margin-top: 4px;
     }
 
     .copyright {

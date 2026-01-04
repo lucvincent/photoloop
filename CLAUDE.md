@@ -120,42 +120,92 @@ sleeps, so SDL2 continues to work properly.
 2. Display enters power saving mode (backlight off, low power)
 3. PhotoLoop keeps running (SDL2 window still exists)
 4. User clicks "Start" → `wlopm --on HDMI-A-1` wakes display
-5. SDL2 renderer is recreated to clear corrupted GPU state (see below)
+5. Full pygame reinitialization to reset corrupted SDL2 state (see below)
 6. Slideshow resumes at correct resolution
 
-**Critical: DPMS Wake GPU State Corruption (Jan 2025) - FIXED**
+**============================================================================**
+**CRITICAL: DPMS Wake SIGSEGV Crash Fix (Jan 2026) - RECURRING ISSUE**
+**============================================================================**
 
-After DPMS standby, SDL2's internal GPU state can become corrupted even though the
-API reports correct dimensions. This causes the "quarter-screen bug" where photos
-render in only the top-left quarter of the display.
+This has been a recurring, difficult-to-debug issue. After DPMS standby on
+Wayland/labwc, SDL2's internal state becomes deeply corrupted in a way that
+causes SIGSEGV (signal 11) crashes when rendering textures.
 
-**Root cause (discovered Jan 2026):**
-The bug is a **race condition with compositor stabilization**. After DPMS wake, the
-labwc compositor continues adjusting GPU buffer sizes even after renderer recreation.
-The bug was non-deterministic (~50% of the time):
-- Sometimes first photo buggy → second fixes it (compositor wasn't ready initially)
-- Sometimes first photo OK → second buggy (compositor made deferred adjustments)
+**Symptoms:**
+- Display wakes correctly (screen turns on)
+- First few frames (~4) render successfully
+- Then SIGSEGV crash occurs during texture.draw()
+- Service restarts but crashes again on next wake attempt
+- Crash is at C level - Python exception handling cannot catch it
 
-**Solution implemented (Jan 2026):**
-Extended "GPU burn-in" period after DPMS wake. Render ~45 frames of solid black
-(~1.5 seconds) to force the compositor to fully commit buffer sizes before
-displaying actual photo content.
+**Root cause:**
+After DPMS wake on Wayland/labwc, SDL2's internal texture management state
+becomes corrupted. This is not a Python-level issue - the corruption is deep
+in SDL2's C code. Simple renderer recreation does NOT fix this because SDL2
+maintains global state beyond just the renderer object.
+
+**Solution: Full pygame reinitialization ("Nuclear Option")**
+The only reliable fix is a complete pygame quit/init cycle after DPMS wake.
+This resets ALL SDL2 internal state, not just the renderer.
+
+**IMPORTANT: The wake sequence is UNIVERSAL**
+
+The same `_wake_display_if_needed()` method is called regardless of how
+the transition to an active mode happens:
+
+| Trigger                          | Path                                |
+|----------------------------------|-------------------------------------|
+| Manual "Start" button            | Web API → show_preloaded_photo()    |
+| Remote control button            | evdev → show_preloaded_photo()      |
+| Scheduled mode change            | Scheduler → show_preloaded_photo()  |
+| BLACK → SLIDESHOW                | show_photo/show_preloaded_photo()   |
+| BLACK → CLOCK                    | _render_clock()                     |
+
+All paths call `_wake_display_if_needed()` which performs the full pygame
+reinit if `_display_powered` is False.
 
 **Wake sequence in `_wake_display_if_needed()`:**
 1. Turn display on (`wlopm --on`)
-2. Brief delay (0.3s) for display to physically wake
-3. Recreate renderer (`_refresh_display_dimensions(force_recreate=True)`)
+2. Brief delay (0.5s) for display to physically wake
+3. Full pygame reinit (`_full_reinitialize()`):
+   - Clear all texture references (they become invalid)
+   - Delete renderer and window objects
+   - `pygame.quit()` - completely releases SDL2 resources
+   - 1 second delay for GPU/compositor to release resources
+   - `pygame.init()` - fresh SDL2 initialization
+   - Recreate window (with fullscreen toggle for correct 4K resolution)
+   - Recreate renderer with hardware acceleration
+   - Reinitialize fonts (they become invalid after quit/init)
+   - Update clock renderer reference
 4. GPU burn-in: 45 black frames at 30fps (~1.5s)
-5. Then display first photo with normal priming
+5. Verify render health
+6. Then display first photo with normal priming
 
-**Known issue:** Desktop may be visible for several seconds between display wake and
-slideshow starting. This is cosmetic. Attempted fix (fullscreen toggle before
-renderer recreation) caused the quarter-screen bug to return - needs different approach.
+**Known side effects:**
+- Desktop visible for 3-5 seconds during pygame reinit (cosmetic)
+- Window flickers during fullscreen toggle (resolution correction)
+- Total wake time: ~5-6 seconds (vs ~2s before this fix)
 
-**Previous failed attempts (for reference):**
-1. Recreate renderer only - partial fix (first photo works, second breaks)
-2. Skip transitions after wake - didn't address root cause
-3. Pre-render while display off - vsync blocks, causes long delays
+**Previous failed attempts (Jan 2026 debugging session):**
+1. Recreate renderer only - SIGSEGV crash after ~4 frames
+2. GPU burn-in with basic clear/present - doesn't exercise texture code path
+3. Texture stress test (create/draw/destroy test textures) - still crashes
+4. Sentinel texture kept alive between frames - still crashes
+5. Extended delays (2+ seconds) - still crashes
+6. Forced garbage collection (gc.collect()) - still crashes
+7. Using pygame.Surface() vs pygame.image.fromstring() - still crashes
+
+**Why these didn't work:**
+All these approaches only affected the renderer or textures. The corruption
+is in SDL2's global state that persists across renderer recreation. Only
+pygame.quit() resets this global state.
+
+**Debugging tips if this issue returns:**
+1. Check logs for "SIGSEGV" or "signal 11" after DPMS wake
+2. The crash typically happens after 3-5 successful texture draws
+3. If burn-in (clear/present) works but photos crash, it's texture corruption
+4. Verify `_full_reinitialize()` is being called (check for "nuclear option" log)
+5. If still crashing, the issue may be with code added after this fix
 
 **Note:** Even on fresh service start, SDL2 initially reports 1920x1080 for a 4K
 display. The mismatch detection and renderer recreation is needed every time.
@@ -201,7 +251,7 @@ XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 wlopm --on HDMI-A-1
 
 **Files involved:**
 - `src/display.py`: `_set_display_power()`, `_get_wayland_output()`, `show_photo()`,
-  `_refresh_display_dimensions(force_recreate)`, `_recreate_renderer()`
+  `_wake_display_if_needed()`, `_full_reinitialize()`, `_recreate_renderer()`
 
 ### Cursor Hiding
 

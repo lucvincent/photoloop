@@ -17,6 +17,13 @@ from pathlib import Path
 from typing import Any, Optional
 from PIL import Image
 
+# Optional systemd watchdog support
+try:
+    import sdnotify
+    SDNOTIFY_AVAILABLE = True
+except ImportError:
+    SDNOTIFY_AVAILABLE = False
+
 # Initialize logging early
 logging.basicConfig(
     level=logging.INFO,
@@ -62,6 +69,11 @@ class PhotoLoop:
         self._running = False
         self._shutdown_event = threading.Event()
 
+        # Systemd watchdog notifier
+        self._sd_notifier = sdnotify.SystemdNotifier() if SDNOTIFY_AVAILABLE else None
+        if SDNOTIFY_AVAILABLE:
+            logger.info("Systemd watchdog support enabled")
+
         # Set up signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -70,6 +82,17 @@ class PhotoLoop:
         """Handle shutdown signals."""
         logger.info(f"Received signal {signum}, initiating shutdown...")
         self.stop()
+
+    def _notify_ready(self) -> None:
+        """Notify systemd that service is ready."""
+        if self._sd_notifier:
+            self._sd_notifier.notify("READY=1")
+            logger.debug("Sent READY=1 to systemd")
+
+    def _notify_watchdog(self) -> None:
+        """Send watchdog keepalive to systemd."""
+        if self._sd_notifier:
+            self._sd_notifier.notify("WATCHDOG=1")
 
     def _load_config(self) -> bool:
         """Load configuration."""
@@ -399,7 +422,12 @@ class PhotoLoop:
         """Handle control request from web interface or CLI."""
         logger.info(f"Control request: {action}")
 
-        if action == 'start':
+        # Mode selection actions (new)
+        if action in ('slideshow', 'clock', 'black'):
+            if self.scheduler:
+                self.scheduler.force_mode(action)
+        # Legacy actions (kept for backward compatibility)
+        elif action == 'start':
             if self.scheduler:
                 self.scheduler.force_on()
         elif action == 'stop':
@@ -408,6 +436,7 @@ class PhotoLoop:
         elif action == 'resume':
             if self.scheduler:
                 self.scheduler.clear_override()
+        # Photo navigation actions
         elif action == 'next':
             if self.display:
                 self.display.skip_to_next()
@@ -476,6 +505,9 @@ class PhotoLoop:
         self._running = True
         logger.info("PhotoLoop started successfully")
 
+        # Notify systemd we're ready
+        self._notify_ready()
+
         # Main loop
         try:
             self._main_loop()
@@ -489,10 +521,14 @@ class PhotoLoop:
 
     def _main_loop(self) -> None:
         """Main application loop."""
-        from .display import DisplayMode
+        from .display import DisplayMode, DisplayRecoveryError
 
         last_mode = None
         current_media = None
+
+        # Watchdog timing
+        watchdog_interval = 10  # seconds
+        last_watchdog = time.time()
 
         while self._running and not self._shutdown_event.is_set():
             try:
@@ -618,8 +654,38 @@ class PhotoLoop:
                     logger.info("Display quit requested")
                     break
 
+                # Send watchdog keepalive if display is healthy
+                now = time.time()
+                if now - last_watchdog >= watchdog_interval:
+                    health = self.display.get_health_status()
+                    if health.get('is_healthy', True):
+                        self._notify_watchdog()
+                    else:
+                        logger.warning(f"Not sending watchdog - display unhealthy: {health}")
+                    last_watchdog = now
+
+            except DisplayRecoveryError as e:
+                # Display recovery failed - exit for systemd restart
+                logger.error(f"Display recovery failed: {e}")
+                logger.info("Exiting with code 1 for systemd restart...")
+                sys.exit(1)
+
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")
+
+                # Check display health on generic errors
+                if hasattr(self.display, 'get_health_status'):
+                    health = self.display.get_health_status()
+                    if not health.get('is_healthy', True):
+                        logger.warning(f"Display unhealthy after error: {health}")
+                        try:
+                            if not self.display._attempt_recovery():
+                                logger.error("Recovery failed, exiting for restart")
+                                sys.exit(1)
+                        except Exception as recovery_error:
+                            logger.error(f"Recovery attempt failed: {recovery_error}")
+                            sys.exit(1)
+
                 time.sleep(1)
 
     def stop(self) -> None:

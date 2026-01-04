@@ -4,6 +4,7 @@ Display engine for PhotoLoop.
 Uses SDL2's hardware-accelerated texture rendering for smooth transitions.
 """
 
+import gc
 import logging
 import os
 import subprocess
@@ -41,6 +42,11 @@ class DisplayMode(Enum):
     SLIDESHOW = "slideshow"
     BLACK = "black"
     CLOCK = "clock"
+
+
+class DisplayRecoveryError(Exception):
+    """Raised when display cannot be recovered and service restart is needed."""
+    pass
 
 
 class Display:
@@ -137,6 +143,9 @@ class Display:
         self._source_texture: Optional[sdl2.Texture] = None
         self._kb_source_size: Tuple[int, int] = (0, 0)
 
+        # Sentinel texture for DPMS wake stability (kept alive between frames)
+        self._sentinel_texture: Optional[sdl2.Texture] = None
+
         # Image processor
         self._processor = ImageProcessor(
             screen_width=self.screen_width,
@@ -197,6 +206,12 @@ class Display:
         self._classification_in_progress: Optional[str] = None  # media_id being classified
         self._classification_callback: Optional[Callable[[str], None]] = None
 
+        # Display health tracking for automatic recovery
+        self._consecutive_render_failures = 0
+        self._last_successful_render = time.time()
+        self._max_consecutive_failures = 5
+        self._render_timeout_seconds = 30
+
         # Verify display dimensions match native resolution
         # SDL2 on Wayland sometimes reports wrong initial size (e.g., 1080p on 4K display)
         self._refresh_display_dimensions()
@@ -233,6 +248,243 @@ class Display:
             pygame.mouse.set_visible(False)
         except Exception:
             pass
+
+    @property
+    def has_valid_renderer(self) -> bool:
+        """Check if renderer exists and is usable."""
+        return self._renderer is not None
+
+    def _create_renderer(self) -> bool:
+        """
+        Create the SDL2 renderer with error handling.
+
+        Returns:
+            True if renderer was created successfully, False otherwise.
+        """
+        try:
+            new_renderer = sdl2.Renderer(self._window, accelerated=True, vsync=True)
+            self._renderer = new_renderer
+            logger.info("SDL2 renderer created successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create SDL2 renderer: {e}")
+            self._renderer = None
+            return False
+
+    def _verify_render_health(self) -> bool:
+        """
+        Verify that rendering is actually working.
+
+        Attempts a simple render operation and checks for success.
+
+        Returns:
+            True if render is healthy, False if intervention needed.
+        """
+        if not self.has_valid_renderer:
+            return False
+        try:
+            self._renderer.draw_color = (0, 0, 0, 255)
+            self._renderer.clear()
+            self._renderer.present()
+            self._consecutive_render_failures = 0
+            self._last_successful_render = time.time()
+            return True
+        except Exception as e:
+            self._consecutive_render_failures += 1
+            logger.warning(f"Render health check failed ({self._consecutive_render_failures}): {e}")
+            return False
+
+    def get_health_status(self) -> dict:
+        """
+        Get display health metrics for monitoring.
+
+        Returns:
+            Dict with health metrics.
+        """
+        seconds_since_success = time.time() - self._last_successful_render
+        return {
+            "has_renderer": self.has_valid_renderer,
+            "consecutive_failures": self._consecutive_render_failures,
+            "seconds_since_successful_render": seconds_since_success,
+            "is_healthy": (
+                self.has_valid_renderer and
+                self._consecutive_render_failures < self._max_consecutive_failures and
+                seconds_since_success < self._render_timeout_seconds
+            ),
+            "display_powered": self._display_powered,
+            "mode": self.mode.value,
+            "resolution": f"{self.screen_width}x{self.screen_height}"
+        }
+
+    def _attempt_recovery(self) -> bool:
+        """
+        Attempt to recover from broken display state.
+
+        Recovery steps:
+        1. Try recreating renderer
+        2. If that fails, try full display reinitialization
+
+        Returns:
+            True if recovery succeeded, False if restart is needed.
+        """
+        logger.warning("Attempting display recovery...")
+
+        # Step 1: Try recreating renderer
+        if self._recreate_renderer():
+            if self._verify_render_health():
+                logger.info("Display recovered via renderer recreation")
+                self._consecutive_render_failures = 0
+                return True
+
+        # Step 2: Try full reinitialization
+        logger.warning("Renderer recreation failed, attempting full reinit...")
+        try:
+            return self._full_reinitialize()
+        except Exception as e:
+            logger.error(f"Full reinitialization failed: {e}")
+            return False
+
+    def _full_reinitialize(self) -> bool:
+        """
+        Fully reinitialize display (pygame quit/init + window + renderer).
+
+        ============================================================================
+        NUCLEAR OPTION FOR DPMS WAKE STABILITY (Jan 2026)
+        ============================================================================
+
+        This method performs a COMPLETE reset of pygame/SDL2 state by calling
+        pygame.quit() followed by pygame.init(). This is necessary because after
+        DPMS wake on Wayland/labwc, SDL2's internal state becomes corrupted in a
+        way that causes SIGSEGV crashes when rendering textures.
+
+        WHY THIS IS NEEDED:
+        - After DPMS standby, SDL2's internal texture management is corrupted
+        - Simple renderer recreation (del renderer + new Renderer) doesn't help
+        - The corruption is at the C level, not Python level
+        - Only a full SDL2 reset via pygame.quit()/init() fixes it
+
+        WHAT THIS METHOD DOES:
+        1. Clears all texture references (they become invalid)
+        2. Deletes renderer and window
+        3. Calls pygame.quit() to fully release SDL2 resources
+        4. Waits 1 second for GPU/compositor to release resources
+        5. Calls pygame.init() for fresh SDL2 state
+        6. Recreates window (with fullscreen toggle for correct 4K resolution)
+        7. Recreates renderer
+        8. Reinitializes fonts (they become invalid after quit/init)
+        9. Updates clock renderer with new renderer reference
+
+        RESOLUTION CORRECTION:
+        On Wayland, SDL2 often initially reports 1920x1080 even on a 4K display.
+        We detect this via wlr-randr and toggle fullscreen to get correct size.
+
+        Returns:
+            True if reinitialization succeeded, False otherwise.
+        ============================================================================
+        """
+        logger.info("Performing full pygame reinitialization (nuclear option)")
+
+        # Clear all texture references
+        self._current_texture = None
+        self._next_texture = None
+        self._source_texture = None
+        self._sentinel_texture = None
+
+        # Clean up existing resources
+        if self._renderer is not None:
+            try:
+                del self._renderer
+            except Exception:
+                pass
+            self._renderer = None
+
+        if hasattr(self, '_window') and self._window is not None:
+            try:
+                del self._window
+            except Exception:
+                pass
+            self._window = None
+
+        # Force garbage collection before pygame quit
+        gc.collect()
+
+        # Full pygame quit to reset ALL SDL2 state
+        try:
+            pygame.quit()
+            logger.info("pygame.quit() completed")
+        except Exception as e:
+            logger.warning(f"pygame.quit() error (may be expected): {e}")
+
+        # Delay for GPU/compositor to fully release resources
+        time.sleep(1.0)
+
+        # Full pygame init to reset SDL2
+        try:
+            pygame.init()
+            logger.info("pygame.init() completed")
+        except Exception as e:
+            logger.error(f"pygame.init() failed: {e}")
+            return False
+
+        # Recreate window
+        try:
+            windowed = os.environ.get("PHOTOLOOP_WINDOWED", "").lower() in ("1", "true", "yes")
+            if windowed:
+                self._window = sdl2.Window(
+                    "PhotoLoop",
+                    size=(self.screen_width, self.screen_height)
+                )
+            else:
+                self._window = sdl2.Window(
+                    "PhotoLoop",
+                    size=(1920, 1080),
+                    fullscreen=True
+                )
+                self.screen_width, self.screen_height = self._window.size
+                logger.info(f"Window recreated: {self.screen_width}x{self.screen_height}")
+
+                # SDL2 on Wayland often initially reports wrong resolution (1920x1080 on 4K)
+                # Check native resolution and toggle fullscreen if needed
+                native_res = self._get_display_resolution()
+                if native_res and (native_res[0] != self.screen_width or native_res[1] != self.screen_height):
+                    logger.info(f"Window size mismatch: SDL2 reports {self.screen_width}x{self.screen_height}, but display is {native_res[0]}x{native_res[1]}")
+                    logger.info("Toggling fullscreen to refresh window dimensions")
+                    self._window.set_fullscreen(False)
+                    time.sleep(0.1)
+                    self._window.set_fullscreen(True)
+                    time.sleep(0.2)
+                    self.screen_width, self.screen_height = self._window.size
+                    logger.info(f"After fullscreen toggle: {self.screen_width}x{self.screen_height}")
+        except Exception as e:
+            logger.error(f"Failed to recreate window: {e}")
+            return False
+
+        # Create renderer
+        if not self._create_renderer():
+            return False
+
+        # Reset viewport
+        try:
+            full_rect = pygame.Rect(0, 0, self.screen_width, self.screen_height)
+            self._renderer.set_viewport(full_rect)
+            logger.info(f"Set viewport to {full_rect}")
+        except Exception as e:
+            logger.warning(f"Could not reset viewport: {e}")
+
+        # Hide cursor again
+        self._hide_cursor()
+
+        # Reinit fonts (they may be invalid after pygame quit/init)
+        self._init_fonts()
+        self._init_feedback_fonts()
+
+        # Reset clock renderer (needs new renderer reference)
+        if self._clock_renderer is not None:
+            self._clock_renderer.update_renderer(self._renderer)
+            self._clock_renderer.update_dimensions(self.screen_width, self.screen_height)
+
+        # Verify health
+        return self._verify_render_health()
 
     def _init_fonts(self) -> None:
         """Initialize fonts for overlay and clock."""
@@ -813,7 +1065,17 @@ class Display:
 
         Returns:
             True to continue running, False to quit.
+
+        Raises:
+            DisplayRecoveryError: If display cannot be recovered after failures.
         """
+        # Health check: verify renderer exists
+        if not self.has_valid_renderer:
+            logger.error("Renderer missing in update() - attempting recovery")
+            if not self._attempt_recovery():
+                raise DisplayRecoveryError("Cannot recover display in update()")
+            return True  # Skip this frame, render next time
+
         events = self.handle_events()
         if "quit" in events:
             return False
@@ -832,40 +1094,58 @@ class Display:
              self._source_texture is not None)
         )
 
-        if self.mode == DisplayMode.BLACK:
-            if self._needs_redraw:
-                self._renderer.draw_color = (0, 0, 0, 255)
-                self._renderer.clear()
-                self._renderer.present()
-                self._needs_redraw = False
-            time.sleep(0.1)
-
-        elif self.mode == DisplayMode.CLOCK:
-            self._render_clock()
-            self._renderer.present()
-            # Use faster updates for smooth ticker animation
-            if self._clock_renderer:
-                interval_ms = self._clock_renderer.get_update_interval_ms()
-                time.sleep(interval_ms / 1000.0)
-            else:
-                time.sleep(0.1)
-
-        elif self.mode == DisplayMode.SLIDESHOW:
-            if self._transitioning:
-                self._render_transition()
-                self._renderer.present()
-                # vsync handles timing, no sleep needed
-                return True  # Continue animation loop
-            elif needs_animation:
-                self._render_slideshow()
-                self._renderer.present()
-                time.sleep(1.0 / self.target_fps)
-            else:
+        try:
+            if self.mode == DisplayMode.BLACK:
                 if self._needs_redraw:
-                    self._render_slideshow()
+                    self._renderer.draw_color = (0, 0, 0, 255)
+                    self._renderer.clear()
                     self._renderer.present()
                     self._needs_redraw = False
                 time.sleep(0.1)
+
+            elif self.mode == DisplayMode.CLOCK:
+                self._render_clock()
+                self._renderer.present()
+                # Use faster updates for smooth ticker animation
+                if self._clock_renderer:
+                    interval_ms = self._clock_renderer.get_update_interval_ms()
+                    time.sleep(interval_ms / 1000.0)
+                else:
+                    time.sleep(0.1)
+
+            elif self.mode == DisplayMode.SLIDESHOW:
+                if self._transitioning:
+                    self._render_transition()
+                    self._renderer.present()
+                    # vsync handles timing, no sleep needed
+                    # Mark successful render
+                    self._last_successful_render = time.time()
+                    self._consecutive_render_failures = 0
+                    return True  # Continue animation loop
+                elif needs_animation:
+                    self._render_slideshow()
+                    self._renderer.present()
+                    time.sleep(1.0 / self.target_fps)
+                else:
+                    if self._needs_redraw:
+                        self._render_slideshow()
+                        self._renderer.present()
+                        self._needs_redraw = False
+                    time.sleep(0.1)
+
+            # Mark successful render
+            self._last_successful_render = time.time()
+            self._consecutive_render_failures = 0
+
+        except Exception as e:
+            self._consecutive_render_failures += 1
+            logger.error(f"Render error in update(): {e}")
+            if self._consecutive_render_failures >= self._max_consecutive_failures:
+                logger.error(f"Too many render failures ({self._consecutive_render_failures})")
+                if not self._attempt_recovery():
+                    raise DisplayRecoveryError(
+                        f"Render failed {self._consecutive_render_failures} times, recovery failed"
+                    )
 
         return True
 
@@ -1222,6 +1502,16 @@ class Display:
 
     def _render_clock(self) -> None:
         """Render clock display using the configurable ClockRenderer."""
+        # Wake display if coming from BLACK mode (user can switch via UI)
+        # This mirrors the pattern used in show_photo() for slideshow
+        if not self._display_powered:
+            # Destroy existing clock renderer before wake - it may have stale state
+            # from before DPMS sleep. Will be recreated fresh after wake.
+            if self._clock_renderer is not None:
+                logger.debug("Destroying clock renderer before DPMS wake")
+                self._clock_renderer = None
+            self._wake_display_if_needed()
+
         # Lazy initialize the clock renderer
         if self._clock_renderer is None:
             # Clear to black immediately to avoid showing stale slideshow content
@@ -1240,12 +1530,18 @@ class Display:
             )
         self._clock_renderer.render()
 
-    def _recreate_renderer(self) -> None:
+    def _recreate_renderer(self) -> bool:
         """
         Recreate the SDL2 renderer to ensure clean state.
 
         This is needed after display power cycles, as the GPU/compositor
         state may become inconsistent on some systems (especially Wayland).
+
+        The method is atomic: _renderer is set to None before deletion,
+        ensuring it always has a valid value (renderer or None), never missing.
+
+        Returns:
+            True if renderer was recreated successfully, False if recovery needed.
         """
         logger.info("Recreating SDL2 renderer after display power cycle")
 
@@ -1253,23 +1549,38 @@ class Display:
         self._current_texture = None
         self._next_texture = None
         self._source_texture = None
+        self._sentinel_texture = None
 
-        # Delete old renderer
-        try:
-            del self._renderer
-        except Exception as e:
-            logger.warning(f"Error deleting old renderer: {e}")
+        # Store old renderer and set to None atomically BEFORE deletion
+        # This ensures _renderer always has a value (never raises AttributeError)
+        old_renderer = self._renderer
+        self._renderer = None
+
+        # Delete old renderer safely
+        if old_renderer is not None:
+            try:
+                del old_renderer
+            except Exception as e:
+                logger.warning(f"Error deleting old renderer: {e}")
 
         # Query current window size
         self.screen_width, self.screen_height = self._window.size
         logger.info(f"Window size after power cycle: {self.screen_width}x{self.screen_height}")
 
-        # Create new renderer
-        self._renderer = sdl2.Renderer(self._window, accelerated=True, vsync=True)
+        # Create new renderer with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            if self._create_renderer():
+                break
+            logger.warning(f"Renderer creation attempt {attempt + 1}/{max_retries} failed")
+            time.sleep(0.5)
+
+        if self._renderer is None:
+            logger.error("Failed to recreate renderer after all attempts")
+            return False
 
         # Reset viewport to full window size (critical for correct rendering)
         try:
-            # Explicitly set viewport to full window dimensions
             full_rect = pygame.Rect(0, 0, self.screen_width, self.screen_height)
             self._renderer.set_viewport(full_rect)
             logger.info(f"Set viewport to {full_rect}")
@@ -1313,6 +1624,7 @@ class Display:
             self._clock_renderer.update_dimensions(self.screen_width, self.screen_height)
 
         logger.info("Renderer recreated successfully")
+        return True
 
     def _get_display_resolution(self) -> Optional[Tuple[int, int]]:
         """
@@ -1349,7 +1661,7 @@ class Display:
 
         return None
 
-    def _refresh_display_dimensions(self, force_recreate: bool = False) -> None:
+    def _refresh_display_dimensions(self, force_recreate: bool = False) -> bool:
         """
         Re-query window dimensions and update if changed.
 
@@ -1361,6 +1673,9 @@ class Display:
             force_recreate: If True, always recreate the renderer even if
                           dimensions appear unchanged. Needed after DPMS wake
                           where GPU state can be corrupted.
+
+        Returns:
+            True if successful, False if renderer recreation failed.
         """
         logger.debug(f"Refreshing display dimensions (force_recreate={force_recreate})")
         new_width, new_height = self._window.size
@@ -1480,7 +1795,9 @@ class Display:
         if dimensions_changed or force_recreate:
             if force_recreate and not dimensions_changed:
                 logger.info("Force recreating renderer after DPMS wake")
-            self._recreate_renderer()
+            if not self._recreate_renderer():
+                logger.error("Renderer recreation failed in _refresh_display_dimensions")
+                return False
 
             # Reinit scaled feedback fonts for new resolution
             self._init_feedback_fonts()
@@ -1489,6 +1806,8 @@ class Display:
             time.sleep(0.1)
 
             logger.info(f"Display dimensions: {self.screen_width}x{self.screen_height}")
+
+        return True
 
     def _get_wayland_output(self) -> Optional[str]:
         """
@@ -1679,8 +1998,8 @@ class Display:
         if mode == DisplayMode.BLACK:
             self.show_black()
         elif mode == DisplayMode.CLOCK:
-            # CLOCK mode means off_hours_mode='clock' - display stays on during off-hours
-            # No wake needed since we never go BLACK → CLOCK
+            # CLOCK mode - display stays on showing clock
+            # Wake happens in _render_clock() right before rendering (like slideshow)
             if self.mode != DisplayMode.CLOCK:
                 self._needs_redraw = True
             self.mode = DisplayMode.CLOCK
@@ -1694,17 +2013,51 @@ class Display:
     def _wake_display_if_needed(self) -> None:
         """Wake display from DPMS standby if powered off.
 
-        This is the SINGLE place where display wake + renderer recreation happens.
-        Called by show_photo() and show_preloaded_photo() right before displaying.
+        ============================================================================
+        CRITICAL: DPMS WAKE STABILITY FIX (Jan 2026)
+        ============================================================================
 
-        TODO: Desktop may be visible for several seconds during wake sequence.
-        The SDL2 window loses foreground/fullscreen state during DPMS standby.
-        Attempted fix (fullscreen toggle before renderer recreation) caused the
-        quarter-screen bug to return. Need to find a way to bring window to
-        foreground without disrupting renderer state. Possible approaches:
-        - Fullscreen toggle AFTER burn-in completes
-        - Use wlrctl or labwc IPC to raise window
-        - Render to a secondary buffer and flip
+        This method handles waking the display from DPMS standby (power saving mode).
+        It is THE SINGLE PLACE where display wake logic should happen.
+
+        CALLED FROM:
+        - show_photo() - slideshow mode, cache miss path
+        - show_preloaded_photo() - slideshow mode, cache hit path (most common)
+        - _render_clock() - clock mode
+
+        This means the wake sequence is IDENTICAL regardless of:
+        - Manual button press (via web UI or remote)
+        - Scheduled mode change (cron-like schedule)
+        - Any transition from BLACK → SLIDESHOW or BLACK → CLOCK
+
+        THE PROBLEM:
+        After DPMS wake on Wayland/labwc, SDL2's internal state becomes deeply
+        corrupted. This manifests as:
+        - Texture operations cause SIGSEGV (signal 11) after ~4 successful frames
+        - The crash is at the C level - Python exception handling cannot catch it
+        - Simple renderer recreation is NOT sufficient
+        - Texture stress tests pass but real photos still crash
+
+        THE SOLUTION (NUCLEAR OPTION):
+        Complete pygame quit/init cycle after DPMS wake. This resets ALL SDL2
+        internal state, not just the renderer. See _full_reinitialize() for details.
+
+        FAILED APPROACHES (for historical reference):
+        1. Recreate renderer only - SIGSEGV after ~4 frames
+        2. GPU burn-in (clear/present) - doesn't exercise texture code path
+        3. Texture stress test (create/draw/destroy) - still crashes
+        4. Sentinel texture kept alive - still crashes
+        5. Extended delays and gc.collect() - still crashes
+        6. Different texture creation methods - still crashes
+
+        SIDE EFFECTS:
+        - Desktop may be visible for 3-5 seconds during pygame reinit
+        - Window flickers during fullscreen toggle for resolution correction
+        - All fonts must be reinitialized (handled in _full_reinitialize)
+
+        Raises:
+            DisplayRecoveryError: If display cannot be recovered after wake.
+        ============================================================================
         """
         if not self._display_powered:
             logger.info("Waking display from DPMS standby")
@@ -1713,25 +2066,30 @@ class Display:
             self._set_display_power(True)
 
             # Brief delay for display to physically wake
-            time.sleep(0.3)
+            time.sleep(0.5)
 
-            # Recreate renderer - GPU state may be corrupted after DPMS
-            logger.info("Recreating renderer after DPMS wake")
-            self._refresh_display_dimensions(force_recreate=True)
+            # NUCLEAR OPTION: Full pygame quit/init after DPMS wake
+            # Simple renderer recreation causes SIGSEGV crashes after a few frames.
+            # This is due to deep SDL2 state corruption from DPMS on Wayland.
+            # The only reliable fix is to completely reset SDL2 via pygame quit/init.
+            logger.info("Performing full pygame reinit after DPMS wake")
+            if not self._full_reinitialize():
+                raise DisplayRecoveryError("Full pygame reinit failed after DPMS wake")
 
             # GPU burn-in: Render black frames to stabilize compositor buffers
-            # This fixes the quarter-screen bug by forcing compositor to commit
-            # buffer sizes before we render actual content. Without this, the
-            # compositor may still be adjusting during photo display, causing
-            # photos to render in only the top-left quarter of the screen.
-            logger.info("GPU burn-in after DPMS wake")
-            burn_in_frames = 45  # ~1.5 seconds at 30fps
-            for _ in range(burn_in_frames):
+            # This is shorter since we just did a full reinit
+            logger.info("GPU burn-in after pygame reinit")
+            for i in range(45):  # ~1.5 seconds at 30fps
                 self._renderer.draw_color = self._bg_color
                 self._renderer.clear()
                 self._renderer.present()
                 time.sleep(1.0 / 30)
-            logger.info("GPU burn-in complete")
+
+            # Verify health after burn-in
+            if not self._verify_render_health():
+                raise DisplayRecoveryError("Display unhealthy after pygame reinit")
+
+            logger.info("Display wake complete, ready for slideshow")
 
     def is_transition_complete(self) -> bool:
         """Check if current transition is complete."""

@@ -549,8 +549,24 @@ def create_app(
 
     @app.route('/api/control/<action>', methods=['POST'])
     def api_control(action: str):
-        """Control the slideshow."""
-        valid_actions = ['start', 'stop', 'resume', 'next', 'prev', 'pause', 'toggle_pause', 'reload']
+        """Control the slideshow.
+
+        Actions:
+            start: Force slideshow mode (legacy, same as 'slideshow')
+            stop: Force off using default_screensaver_mode (legacy)
+            resume: Clear override, return to schedule
+            slideshow: Force slideshow mode
+            clock: Force clock mode
+            black: Force black screen mode
+            next/prev: Navigate photos
+            pause/toggle_pause: Pause/resume slideshow
+            reload: Reload configuration
+        """
+        # Mode actions that use force_mode()
+        mode_actions = ['slideshow', 'clock', 'black']
+        # Legacy and other actions
+        other_actions = ['start', 'stop', 'resume', 'next', 'prev', 'pause', 'toggle_pause', 'reload']
+        valid_actions = mode_actions + other_actions
 
         if action not in valid_actions:
             return jsonify({"error": f"Invalid action. Valid: {valid_actions}"}), 400
@@ -560,8 +576,10 @@ def create_app(
                 app.on_control_request(action)
                 return jsonify({"success": True, "action": action})
             elif app.scheduler:
-                # Direct scheduler control
-                if action == 'start':
+                # Direct scheduler control (when main app callback not available)
+                if action in mode_actions:
+                    app.scheduler.force_mode(action)
+                elif action == 'start':
                     app.scheduler.force_on()
                 elif action == 'stop':
                     app.scheduler.force_off()

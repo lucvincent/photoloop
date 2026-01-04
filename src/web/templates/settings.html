@@ -55,17 +55,34 @@
                 Use these controls to navigate photos or pause the slideshow on a specific photo.
             </p>
 
-            <h2>Slideshow Control</h2>
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; margin-bottom: 8px;">
-                <div class="control-buttons" style="margin: 0;">
-                    <button id="btn-start" class="btn btn-success">Start</button>
-                    <button id="btn-stop" class="btn btn-danger">Stop</button>
-                </div>
-                <span id="no-content-msg" class="help-text" style="display: none; color: var(--warning);">Enable albums and sync to download photos.</span>
+            <h2>Display Mode</h2>
+            <div class="mode-buttons">
+                <button id="btn-slideshow" class="btn btn-mode" data-mode="slideshow" title="Show photos">
+                    <span class="mode-icon">▶</span>
+                    <span class="mode-text">Slideshow</span>
+                </button>
+                <button id="btn-clock" class="btn btn-mode" data-mode="clock" title="Show clock">
+                    <span class="mode-icon">🕐</span>
+                    <span class="mode-text">Clock</span>
+                </button>
+                <button id="btn-black" class="btn btn-mode" data-mode="black" title="Turn off display">
+                    <span class="mode-icon">■</span>
+                    <span class="mode-text">Black Screen</span>
+                </button>
+                <button id="btn-resume" class="btn btn-mode btn-resume" title="Return to scheduled mode" style="display: none;">
+                    <span class="mode-icon">↩</span>
+                    <span class="mode-text">Resume Schedule</span>
+                </button>
+            </div>
+            <div id="no-content-msg" class="help-text" style="display: none; color: var(--warning); margin-top: 8px;">
+                Enable albums and sync to download photos.
             </div>
 
             <div class="status-box" style="margin-top: 20px;">
-                <h3 style="margin-top: 0;">Current Status: <span id="state" class="status-badge">-</span></h3>
+                <h3 style="margin-top: 0;">
+                    <span id="state" class="status-badge">-</span>
+                    <span id="mode-reason" class="mode-reason"></span>
+                </h3>
                 <div id="current-status">
                     <p><strong>Next Change:</strong> <span id="next-transition">-</span></p>
                     <p><strong>Photos Cached:</strong> <span id="photo-count">-</span></p>
@@ -534,45 +551,87 @@
                 const status = await apiCall('/api/status');
 
                 if (status.schedule) {
-                    // Map scheduler state to user-friendly display
                     const stateEl = document.getElementById('state');
-                    const state = status.schedule.state;
+                    const modeReasonEl = document.getElementById('mode-reason');
+                    const displayMode = status.schedule.display_mode;
+                    const modeReason = status.schedule.mode_reason;
                     const isPaused = status.photo_control && status.photo_control.paused;
                     const hasContent = status.has_content !== false;
+                    const hasOverride = status.schedule.has_override;
+
+                    // Determine status badge text and class based on display_mode
                     let displayText, badgeClass;
 
-                    if ((state === 'active' || state === 'force_on') && !hasContent) {
-                        // Schedule wants to run but no content available
-                        displayText = 'No Content';
-                        badgeClass = 'status-badge stopped';
-                    } else if (state === 'active' || state === 'force_on') {
-                        if (isPaused) {
-                            displayText = 'Paused';
+                    if (displayMode === 'slideshow') {
+                        if (!hasContent) {
+                            displayText = 'No Photos';
+                            badgeClass = 'status-badge stopped';
+                        } else if (isPaused) {
+                            displayText = 'Slideshow (Paused)';
                             badgeClass = 'status-badge paused';
                         } else {
-                            displayText = 'Running';
+                            displayText = 'Slideshow';
                             badgeClass = 'status-badge running';
                         }
-                    } else if (state === 'off_hours') {
-                        displayText = 'Off-Hours';
-                        badgeClass = 'status-badge off-hours';
-                    } else if (state === 'force_off') {
-                        displayText = 'Stopped';
-                        badgeClass = 'status-badge stopped';
+                    } else if (displayMode === 'clock') {
+                        displayText = 'Clock';
+                        badgeClass = 'status-badge clock';
+                    } else if (displayMode === 'black') {
+                        displayText = 'Display Off';
+                        badgeClass = 'status-badge off';
                     } else {
-                        displayText = state;
+                        displayText = displayMode || '-';
                         badgeClass = 'status-badge';
                     }
 
                     stateEl.textContent = displayText;
                     stateEl.className = badgeClass;
 
+                    // Show mode reason (scheduled, manual, disabled)
+                    let reasonText = '';
+                    if (modeReason === 'manual') {
+                        reasonText = '(Manual)';
+                    } else if (modeReason === 'scheduled') {
+                        reasonText = '(Scheduled)';
+                    } else if (modeReason === 'disabled') {
+                        reasonText = '(Schedule Disabled)';
+                    }
+                    modeReasonEl.textContent = reasonText;
+
+                    // Update mode buttons - highlight active mode
+                    document.querySelectorAll('.btn-mode[data-mode]').forEach(btn => {
+                        const btnMode = btn.dataset.mode;
+                        if (btnMode === displayMode) {
+                            btn.classList.add('active');
+                        } else {
+                            btn.classList.remove('active');
+                        }
+                    });
+
+                    // Show Resume button only when there's an active override
+                    const resumeBtn = document.getElementById('btn-resume');
+                    resumeBtn.style.display = hasOverride ? '' : 'none';
+
+                    // Disable slideshow button if no content
+                    const slideshowBtn = document.getElementById('btn-slideshow');
+                    const noContentMsg = document.getElementById('no-content-msg');
+                    if (!hasContent) {
+                        slideshowBtn.disabled = true;
+                        slideshowBtn.classList.add('disabled');
+                        noContentMsg.style.display = '';
+                    } else {
+                        slideshowBtn.disabled = false;
+                        slideshowBtn.classList.remove('disabled');
+                        noContentMsg.style.display = 'none';
+                    }
+
+                    // Update next transition
                     if (status.schedule.next_transition && status.schedule.next_transition.time) {
                         const nextTime = new Date(status.schedule.next_transition.time);
                         const timeStr = nextTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                         document.getElementById('next-transition').textContent =
                             `${status.schedule.next_transition.description} at ${timeStr}`;
-                    } else if (status.schedule.has_override) {
+                    } else if (hasOverride) {
                         document.getElementById('next-transition').textContent = 'None (manual control active)';
                     } else if (!status.schedule_enabled) {
                         document.getElementById('next-transition').textContent = 'None (schedule disabled)';
@@ -593,36 +652,6 @@
                             `${breakdown.total} MB (downloaded: ${breakdown.downloaded} MB, pre-rendered: ${breakdown.rendered} MB)`;
                     } else {
                         document.getElementById('cache-size-detail').textContent = status.cache.size_mb + ' MB';
-                    }
-                }
-
-                // Update button states based on current state
-                if (status.schedule) {
-                    const state = status.schedule.state;
-                    const scheduleRunning = (state === 'active' || state === 'force_on');
-                    const hasContent = status.has_content !== false;  // Default true if not present
-                    // Effectively running only if schedule says so AND we have content
-                    const isRunning = scheduleRunning && hasContent;
-
-                    // Show Start when stopped/off-hours/no-content, Show Stop when running
-                    const startBtn = document.getElementById('btn-start');
-                    const stopBtn = document.getElementById('btn-stop');
-                    const noContentMsg = document.getElementById('no-content-msg');
-
-                    startBtn.style.display = isRunning ? 'none' : '';
-                    stopBtn.style.display = isRunning ? '' : 'none';
-
-                    // Disable Start and show message when no content available
-                    if (!hasContent) {
-                        startBtn.disabled = true;
-                        startBtn.style.opacity = '0.5';
-                        startBtn.style.cursor = 'not-allowed';
-                        noContentMsg.style.display = '';
-                    } else {
-                        startBtn.disabled = false;
-                        startBtn.style.opacity = '';
-                        startBtn.style.cursor = '';
-                        noContentMsg.style.display = 'none';
                     }
                 }
 
@@ -888,15 +917,21 @@
             }
         }
 
-        // Control buttons
-        document.getElementById('btn-start').addEventListener('click', () => {
-            apiCall('/api/control/start', 'POST');
+        // Mode selection buttons
+        document.querySelectorAll('.btn-mode[data-mode]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const mode = btn.dataset.mode;
+                apiCall(`/api/control/${mode}`, 'POST');
+                setTimeout(loadStatus, 500);
+            });
+        });
+
+        // Resume schedule button
+        document.getElementById('btn-resume').addEventListener('click', () => {
+            apiCall('/api/control/resume', 'POST');
             setTimeout(loadStatus, 500);
         });
-        document.getElementById('btn-stop').addEventListener('click', () => {
-            apiCall('/api/control/stop', 'POST');
-            setTimeout(loadStatus, 500);
-        });
+
         document.getElementById('btn-next').addEventListener('click', () => {
             apiCall('/api/control/next', 'POST');
         });

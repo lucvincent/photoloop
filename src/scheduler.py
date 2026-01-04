@@ -60,6 +60,7 @@ class Scheduler:
         self.config = config
         self._override: Optional[ScheduleState] = None
         self._override_expires: Optional[datetime] = None
+        self._override_mode: Optional[str] = None  # Specific mode for FORCE_OFF
         self._holiday_cache: dict = {}  # Cache holiday lookups
 
     def _parse_time(self, time_str: str | int) -> dt_time:
@@ -264,6 +265,7 @@ class Scheduler:
                 logger.info(f"Override expired at {self._override_expires}, resuming schedule")
                 self._override = None
                 self._override_expires = None
+                self._override_mode = None
 
     def _is_time_in_range(
         self,
@@ -313,7 +315,8 @@ class Scheduler:
         if self._override == ScheduleState.FORCE_ON:
             return "slideshow"
         elif self._override == ScheduleState.FORCE_OFF:
-            return self.config.schedule.default_screensaver_mode
+            # Use specific override mode if set, otherwise fall back to default
+            return self._override_mode or self.config.schedule.default_screensaver_mode
 
         # If scheduling disabled, always slideshow
         if not self.config.schedule.enabled:
@@ -404,16 +407,46 @@ class Scheduler:
         """
         self._override = ScheduleState.FORCE_OFF
         self._override_expires = self._get_next_event_start(datetime.now())
+        self._override_mode = None  # Use default_screensaver_mode
         mode = self.config.schedule.default_screensaver_mode
         if self._override_expires:
             logger.info(f"Schedule override: FORCE OFF ({mode}) (expires at {self._override_expires})")
         else:
             logger.info(f"Schedule override: FORCE OFF ({mode}) (no expiry)")
 
+    def force_mode(self, mode: str) -> None:
+        """
+        Force a specific display mode (manual override).
+
+        This is the preferred method for UI controls, allowing explicit selection
+        of slideshow, clock, or black screen mode.
+
+        Override expires at the next scheduled event start time.
+
+        Args:
+            mode: One of "slideshow", "clock", or "black"
+        """
+        if mode not in ("slideshow", "clock", "black"):
+            raise ValueError(f"Invalid mode: {mode}. Must be 'slideshow', 'clock', or 'black'")
+
+        if mode == "slideshow":
+            self._override = ScheduleState.FORCE_ON
+            self._override_mode = None
+        else:
+            self._override = ScheduleState.FORCE_OFF
+            self._override_mode = mode
+
+        self._override_expires = self._get_next_event_start(datetime.now())
+        if self._override_expires:
+            logger.info(f"Schedule override: {mode} (expires at {self._override_expires})")
+        else:
+            logger.info(f"Schedule override: {mode} (no expiry)")
+
     def clear_override(self) -> None:
         """Clear manual override and resume normal schedule immediately."""
         self._override = None
         self._override_expires = None
+        self._override_mode = None
         logger.info("Schedule override cleared, resuming normal schedule")
 
     def has_override(self) -> bool:
@@ -579,11 +612,21 @@ class Scheduler:
         next_transition = self.get_next_transition(now)
         today = self.get_today_schedule(now)
 
+        # Determine mode_reason: why is the current mode active?
+        # Possible values: "scheduled", "manual", "disabled"
+        if self._override is not None:
+            mode_reason = "manual"
+        elif not self.config.schedule.enabled:
+            mode_reason = "disabled"
+        else:
+            mode_reason = "scheduled"
+
         # Get override info
         override_info = None
         if self._override is not None:
             override_info = {
                 "type": "force_on" if self._override == ScheduleState.FORCE_ON else "force_off",
+                "mode": self._override_mode,  # The specific mode for force_off
                 "expires": self._override_expires.isoformat() if self._override_expires else None
             }
 
@@ -597,6 +640,7 @@ class Scheduler:
         return {
             "state": state.value,
             "display_mode": display_mode,
+            "mode_reason": mode_reason,
             "should_show_slideshow": self.should_show_slideshow(now),
             "off_hours_mode": self.get_off_hours_mode(),
             "default_screensaver_mode": self.config.schedule.default_screensaver_mode,
