@@ -414,6 +414,13 @@ class Display:
         self._source_texture = None
         self._sentinel_texture = None
 
+        # CRITICAL: Destroy clock renderer BEFORE pygame.quit()
+        # It holds cached pygame surfaces that become invalid after quit.
+        # Will be recreated fresh when clock mode is next used.
+        if self._clock_renderer is not None:
+            logger.debug("Destroying clock renderer before pygame.quit()")
+            self._clock_renderer = None
+
         # Clean up existing resources
         if self._renderer is not None:
             try:
@@ -474,9 +481,9 @@ class Display:
                     logger.info(f"Window size mismatch: SDL2 reports {self.screen_width}x{self.screen_height}, but display is {native_res[0]}x{native_res[1]}")
                     logger.info("Toggling fullscreen to refresh window dimensions")
                     self._window.set_fullscreen(False)
-                    time.sleep(0.1)
+                    time.sleep(0.5)  # Give compositor time to settle
                     self._window.set_fullscreen(True)
-                    time.sleep(0.2)
+                    time.sleep(1.0)  # Generous delay for fullscreen to stabilize
                     self.screen_width, self.screen_height = self._window.size
                     logger.info(f"After fullscreen toggle: {self.screen_width}x{self.screen_height}")
         except Exception as e:
@@ -495,6 +502,15 @@ class Display:
         except Exception as e:
             logger.warning(f"Could not reset viewport: {e}")
 
+        # IMMEDIATELY clear to black after renderer setup
+        # This prevents stale buffers from showing during the rest of reinit
+        try:
+            self._renderer.draw_color = (0, 0, 0, 255)
+            self._renderer.clear()
+            self._renderer.present()
+        except Exception as e:
+            logger.warning(f"Could not clear to black after renderer setup: {e}")
+
         # Hide cursor again
         self._hide_cursor()
 
@@ -502,10 +518,8 @@ class Display:
         self._init_fonts()
         self._init_feedback_fonts()
 
-        # Reset clock renderer (needs new renderer reference)
-        if self._clock_renderer is not None:
-            self._clock_renderer.update_renderer(self._renderer)
-            self._clock_renderer.update_dimensions(self.screen_width, self.screen_height)
+        # Note: clock_renderer was destroyed before pygame.quit() and will be
+        # recreated fresh when clock mode is next used (lazy initialization)
 
         # Verify health
         return self._verify_render_health()
@@ -2192,8 +2206,10 @@ class Display:
             # Turn display on first
             self._set_display_power(True)
 
-            # Brief delay for display to physically wake
-            time.sleep(0.5)
+            # Delay for display to physically wake and stabilize
+            # Must be generous to avoid race conditions with Wayland compositor
+            # 0.5s was not enough, 1.0s still had issues - use 2.0s for robustness
+            time.sleep(2.0)
 
             # NUCLEAR OPTION: Full pygame quit/init after DPMS wake
             # Simple renderer recreation causes SIGSEGV crashes after a few frames.
@@ -2203,8 +2219,12 @@ class Display:
             if not self._full_reinitialize():
                 raise DisplayRecoveryError("Full pygame reinit failed after DPMS wake")
 
+            # Additional delay for compositor to fully recognize the new window
+            # This helps prevent the "quarter photo" artifact during wake
+            time.sleep(0.5)
+
             # GPU burn-in Phase 1: Render black frames to stabilize compositor buffers
-            logger.info("GPU burn-in phase 1: clear/present")
+            logger.info(f"GPU burn-in phase 1: clear/present at {self.screen_width}x{self.screen_height}")
             for i in range(45):  # ~1.5 seconds at 30fps
                 self._renderer.draw_color = self._bg_color
                 self._renderer.clear()
@@ -2248,6 +2268,24 @@ class Display:
             # Verify health after burn-in (now includes texture test)
             if not self._verify_render_health():
                 raise DisplayRecoveryError("Display unhealthy after pygame reinit")
+
+            # CRITICAL: Verify resolution is correct AFTER burn-in
+            # The compositor may have adjusted buffers during or after reinit.
+            # If dimensions are wrong, the quarter-screen bug will occur.
+            native_res = self._get_display_resolution()
+            if native_res:
+                if native_res[0] != self.screen_width or native_res[1] != self.screen_height:
+                    logger.warning(f"Resolution mismatch after burn-in: SDL2={self.screen_width}x{self.screen_height}, native={native_res[0]}x{native_res[1]}")
+                    logger.info("Performing second pygame reinit to correct resolution")
+                    if not self._full_reinitialize():
+                        raise DisplayRecoveryError("Second pygame reinit failed after resolution mismatch")
+                    # Verify again
+                    native_res = self._get_display_resolution()
+                    if native_res and (native_res[0] != self.screen_width or native_res[1] != self.screen_height):
+                        logger.error(f"Resolution STILL wrong after second reinit: {self.screen_width}x{self.screen_height} vs {native_res}")
+                        # Continue anyway - better than crashing
+                else:
+                    logger.info(f"Resolution verified correct: {self.screen_width}x{self.screen_height}")
 
             logger.info("Display wake complete, ready for slideshow")
 
