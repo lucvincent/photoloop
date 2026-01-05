@@ -489,14 +489,14 @@
             </div>
 
             <h2 style="margin-top: 30px;">Cache Management</h2>
-            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 15px;">
+            <div style="margin-top: 15px;">
                 <button id="btn-clear-cache" class="btn btn-danger">Clear Photo Cache</button>
-                <button id="btn-reset-metadata" class="btn btn-danger">Reset Metadata</button>
+                <p class="help-text" style="margin-top: 8px;">Deletes all cached photos. They will be re-downloaded on next sync.</p>
             </div>
-            <p class="help-text" style="margin-top: 8px;">
-                <strong>Clear Photo Cache:</strong> Deletes all cached photos. They will be re-downloaded on next sync.<br>
-                <strong>Reset Metadata:</strong> Clears cached Google Photos metadata. It will be re-fetched on next sync.
-            </p>
+            <div style="margin-top: 15px;">
+                <button id="btn-reset-metadata" class="btn btn-danger">Reset Metadata</button>
+                <p class="help-text" style="margin-top: 8px;">Clears cached Google Photos metadata. It will be re-fetched on next sync.</p>
+            </div>
 
             <h3 style="margin-top: 30px;">Cached Photos <span id="photo-grid-count" style="font-weight: normal; font-size: 14px; color: #81d4fa;"></span></h3>
             <p style="margin: 5px 0 10px 0; font-size: 13px; color: #888;">Newest additions first. Note: Photos deleted from local directories will show as empty frames until the next sync.</p>
