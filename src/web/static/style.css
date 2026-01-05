@@ -1016,8 +1016,26 @@ input[type="checkbox"] {
         align-items: flex-start;
     }
 
+    .album-name-row {
+        display: block;
+    }
+
+    .album-name-wrapper {
+        display: inline;
+    }
+
+    .album-name-wrapper .source-badge {
+        display: inline;
+        vertical-align: middle;
+    }
+
     .album-name {
         min-width: auto;
+        display: inline;
+    }
+
+    .album-photo-count {
+        display: inline;
     }
 
     .album-url {
