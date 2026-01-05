@@ -1370,11 +1370,32 @@ class Display:
         seen_values = set()
 
         def add_if_unique(priority: int, value: str) -> None:
-            """Add value if not a duplicate (case-insensitive comparison)."""
+            """Add value if not redundant (handles exact duplicates and substrings).
+
+            Logic:
+            - If new value exactly matches existing → skip (duplicate)
+            - If new value is substring of existing → skip (redundant)
+            - If existing value is substring of new → replace existing with new
+            """
             normalized = value.lower().strip()
-            if normalized not in seen_values:
-                seen_values.add(normalized)
-                available.append((priority, value))
+
+            # Check against all seen values for substring relationships
+            for seen in list(seen_values):  # Copy to allow modification
+                if normalized == seen:
+                    # Exact duplicate - skip
+                    return
+                if normalized in seen:
+                    # New value is substring of existing - skip (existing is more complete)
+                    return
+                if seen in normalized:
+                    # Existing is substring of new - remove existing, add new
+                    seen_values.discard(seen)
+                    # Also remove from available list
+                    nonlocal available
+                    available = [(p, v) for p, v in available if v.lower().strip() != seen]
+
+            seen_values.add(normalized)
+            available.append((priority, value))
 
         # Google caption/description from Google Photos DOM
         if "google_caption" in source_priorities:
