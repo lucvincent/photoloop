@@ -1472,9 +1472,14 @@ class Display:
 
         # Render text to surfaces
         # Calculate max characters to fit within screen width with some margin
-        # Approximate character width is ~0.6 * font_size for most fonts
-        char_width_approx = overlay_cfg.font_size * 0.6
-        max_overlay_width = min(self.screen_width - 2 * overlay_cfg.padding, 3800)  # Cap at 3800 to stay under 4096
+        # Measure actual average character width from the font using a representative sample
+        # Use lowercase-heavy text since captions are mostly lowercase English
+        sample_text = "the quick brown fox jumps over the lazy dog 0123456789 ABCDEF"
+        sample_surface = self._overlay_font.render(sample_text, True, (255, 255, 255))
+        char_width_approx = sample_surface.get_width() / len(sample_text)
+        del sample_surface  # Clean up
+        # Limit overlay to 75% of screen width for better aesthetics, capped at 3800 for SDL2
+        max_overlay_width = min(int(self.screen_width * 0.75), 3800)
         max_chars = max(20, int(max_overlay_width / char_width_approx))
 
         text_surfaces = []
@@ -1544,8 +1549,35 @@ class Display:
             del surf
 
     def _wrap_text(self, text: str, max_width_chars: int = 50) -> list:
-        """Wrap text to fit within screen."""
+        """Wrap text to fit within screen, balancing line lengths for 2-line cases."""
         words = text.split()
+        if not words:
+            return []
+
+        total_length = len(text)
+
+        # If it fits on one line, no wrapping needed
+        if total_length <= max_width_chars:
+            return [text]
+
+        # For text that fits in 2 lines, find a balanced break point near the middle
+        if total_length <= max_width_chars * 2:
+            target_mid = total_length // 2
+            best_break = 0
+            current_pos = 0
+
+            # Find the word break closest to the middle
+            for i, word in enumerate(words[:-1]):  # Don't break after last word
+                current_pos += len(word) + 1
+                if abs(current_pos - target_mid) < abs(best_break - target_mid):
+                    best_break = current_pos
+                    best_index = i + 1
+
+            line1 = " ".join(words[:best_index])
+            line2 = " ".join(words[best_index:])
+            return [line1, line2] if line2 else [line1]
+
+        # For 3+ lines, use standard greedy wrap
         lines = []
         current_line = []
         current_length = 0
