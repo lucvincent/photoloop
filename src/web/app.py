@@ -995,6 +995,36 @@ def create_app(
             logger.error(f"Error clearing cache: {e}")
             return jsonify({"error": str(e)}), 500
 
+    @app.route('/api/cache/metadata-stats')
+    def api_metadata_stats():
+        """Get Google Photos metadata fetch statistics."""
+        try:
+            if app.cache_manager:
+                stats = app.cache_manager.get_metadata_stats()
+                return jsonify(stats)
+            else:
+                return jsonify({"error": "Cache manager not available"}), 503
+        except Exception as e:
+            logger.error(f"Error getting metadata stats: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route('/api/cache/reset-metadata', methods=['POST'])
+    def api_reset_metadata():
+        """Reset metadata fetch flag for all Google Photos."""
+        try:
+            if app.cache_manager:
+                count = app.cache_manager.reset_all_google_metadata()
+                return jsonify({
+                    "success": True,
+                    "message": f"Reset metadata for {count} Google Photos",
+                    "count": count
+                })
+            else:
+                return jsonify({"error": "Cache manager not available"}), 503
+        except Exception as e:
+            logger.error(f"Error resetting metadata: {e}")
+            return jsonify({"error": str(e)}), 500
+
     return app
 
 

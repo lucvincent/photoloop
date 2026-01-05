@@ -785,6 +785,21 @@ Before modifying any sync/resolution settings:
 - Album scraper can OOM on very large albums (needs batching/streaming)
 - Chrome memory usage accumulates during long scroll sessions
 
+### Web UI Development (Flask)
+
+**IMPORTANT: Flask caches templates.** After modifying HTML templates in `src/web/templates/`,
+you MUST restart the PhotoLoop service for changes to appear:
+
+```bash
+sudo systemctl restart photoloop
+```
+
+Then hard-refresh the browser (`Ctrl+Shift+R`) or close and reopen the tab.
+
+**Service worker caching:** The PWA uses a service worker (`src/web/static/sw.js`) that caches
+static assets. When updating CSS or JS, bump the `CACHE_NAME` version number (e.g., `photoloop-v40`
+→ `photoloop-v41`) to force browsers to fetch the new files.
+
 ### Ken Burns Effect (Experimental)
 
 **Status:** Disabled by default (`ken_burns.enabled: false`). This feature is experimental

@@ -1619,7 +1619,7 @@ class CacheManager:
         return params
 
     def get_media_count(self) -> Dict[str, int]:
-        """Get counts of cached media by type."""
+        """Get counts of cached media by type and source."""
         with self._lock:
             photos = sum(
                 1 for c in self._media.values()
@@ -1629,7 +1629,57 @@ class CacheManager:
                 1 for c in self._media.values()
                 if c.media_type == "video" and not c.deleted
             )
-            return {"photos": photos, "videos": videos, "total": photos + videos}
+            downloaded = sum(
+                1 for c in self._media.values()
+                if c.source_type == "google_photos" and not c.deleted
+            )
+            local = sum(
+                1 for c in self._media.values()
+                if c.source_type == "local" and not c.deleted
+            )
+            return {
+                "photos": photos,
+                "videos": videos,
+                "total": photos + videos,
+                "downloaded": downloaded,
+                "local": local
+            }
+
+    def get_metadata_stats(self) -> Dict[str, int]:
+        """Get counts of Google Photos with metadata fetched vs total.
+
+        Returns:
+            Dict with 'fetched' (count with metadata) and 'total' (all Google Photos).
+        """
+        with self._lock:
+            google_photos = [
+                c for c in self._media.values()
+                if c.source_type == "google_photos" and not c.deleted
+            ]
+            fetched = sum(1 for c in google_photos if c.google_metadata_fetched)
+            return {"fetched": fetched, "total": len(google_photos)}
+
+    def reset_all_google_metadata(self) -> int:
+        """Reset google_metadata_fetched flag for all Google Photos.
+
+        This allows metadata to be re-fetched on the next sync.
+        Does NOT clear existing metadata values (captions, locations).
+
+        Returns:
+            Number of photos affected.
+        """
+        count = 0
+        with self._lock:
+            for cached in self._media.values():
+                if cached.source_type == "google_photos" and not cached.deleted:
+                    if cached.google_metadata_fetched:
+                        cached.google_metadata_fetched = False
+                        count += 1
+            if count > 0:
+                self._save_metadata()
+
+        logger.info(f"Reset metadata fetch flag for {count} Google Photos")
+        return count
 
     def get_cache_size_mb(self) -> float:
         """Get downloaded photos cache size in MB."""

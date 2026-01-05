@@ -133,14 +133,12 @@
             <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border);">
                 <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                     <button id="btn-sync" class="btn btn-primary">Sync Now</button>
-                    <button id="btn-refetch-sync" class="btn btn-primary">Full Re-sync</button>
                     <button id="btn-stop-sync" class="btn btn-danger" disabled>Stop Sync</button>
                 </div>
                 <p class="help-text" style="margin-top: 8px;">
-                    <strong>Sync Now:</strong> Downloads new photos and fetches metadata for photos missing it.<br>
-                    <strong>Full Re-sync:</strong> Syncs photos AND re-downloads metadata for ALL Google Photos (slow).<br>
-                    <em>Note: These options only affect Google Photos albums. Local albums use embedded EXIF metadata.</em><br>
-                    <em>Tip: If sync stops due to memory limits on large albums, run Sync Now again to continue.</em>
+                    Downloads new Google Photos and fetches metadata for photos missing it.
+                    To refresh existing metadata (slow), first Reset Metadata from the Cache tab.
+                    Multiple manual or scheduled syncs may be required to fetch all Google Photos metadata due to memory limits on large albums.
                 </p>
             </div>
 
@@ -479,23 +477,32 @@
 
         <!-- Cache Tab -->
         <section id="cache" class="tab-content">
-            <h2>Cache Management</h2>
+            <h2>Cache Details</h2>
 
             <div class="status-box" style="margin-top: 15px;">
                 <p><strong>Cache Directory:</strong> {{ config.cache.directory }}</p>
-                <p><strong>Max Size:</strong> {{ config.cache.max_size_mb }} MB</p>
-                <p><strong>Current Size:</strong> <span id="cache-size-detail">-</span></p>
+                <p><strong>Max Photo Cache Size:</strong> {{ config.cache.max_size_mb }} MB</p>
+                <p><strong>Current Photo Cache Size:</strong> <span id="cache-size-detail">-</span></p>
                 <p><strong>Photos:</strong> <span id="photo-count-detail">-</span></p>
                 <p><strong>Videos:</strong> <span id="video-count-detail">-</span></p>
+                <p><strong>Cached Metadata:</strong> <span id="metadata-count-detail">-</span></p>
             </div>
 
-            <h3>Cached Photos <span id="photo-grid-count" style="font-weight: normal; font-size: 14px; color: #81d4fa;"></span></h3>
+            <h2 style="margin-top: 30px;">Cache Management</h2>
+            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 15px;">
+                <button id="btn-clear-cache" class="btn btn-danger">Clear Photo Cache</button>
+                <button id="btn-reset-metadata" class="btn btn-danger">Reset Metadata</button>
+            </div>
+            <p class="help-text" style="margin-top: 8px;">
+                <strong>Clear Photo Cache:</strong> Deletes all cached photos. They will be re-downloaded on next sync.<br>
+                <strong>Reset Metadata:</strong> Clears cached Google Photos metadata. It will be re-fetched on next sync.
+            </p>
+
+            <h3 style="margin-top: 30px;">Cached Photos <span id="photo-grid-count" style="font-weight: normal; font-size: 14px; color: #81d4fa;"></span></h3>
             <p style="margin: 5px 0 10px 0; font-size: 13px; color: #888;">Newest additions first. Note: Photos deleted from local directories will show as empty frames until the next sync.</p>
             <div id="photo-grid" class="photo-grid" style="max-height: 500px; overflow-y: auto; border: 1px solid #333; border-radius: 8px; padding: 10px; background: #16213e;">
                 <!-- Thumbnails will be loaded here -->
             </div>
-
-            <button id="btn-clear-cache" class="btn btn-danger" style="margin-top: 15px;">Clear Cache</button>
         </section>
 
         <footer class="copyright">
@@ -646,8 +653,15 @@
                 if (status.cache) {
                     document.getElementById('photo-count').textContent = status.cache.counts.photos;
                     document.getElementById('cache-size').textContent = status.cache.size_mb;
-                    document.getElementById('photo-count-detail').textContent = status.cache.counts.photos;
-                    document.getElementById('video-count-detail').textContent = status.cache.counts.videos;
+                    // Show photo count with source breakdown
+                    const counts = status.cache.counts;
+                    if (counts.downloaded !== undefined && counts.local !== undefined) {
+                        document.getElementById('photo-count-detail').textContent =
+                            `${counts.photos} (${counts.downloaded} downloaded, ${counts.local} local)`;
+                    } else {
+                        document.getElementById('photo-count-detail').textContent = counts.photos;
+                    }
+                    document.getElementById('video-count-detail').textContent = counts.videos;
                     // Show breakdown: "XX MB (downloaded: XX MB, pre-rendered: XX MB)"
                     const breakdown = status.cache.size_breakdown;
                     if (breakdown) {
@@ -656,6 +670,17 @@
                     } else {
                         document.getElementById('cache-size-detail').textContent = status.cache.size_mb + ' MB';
                     }
+                }
+
+                // Load metadata stats separately
+                try {
+                    const metaStats = await apiCall('/api/cache/metadata-stats');
+                    if (metaStats && metaStats.total !== undefined) {
+                        document.getElementById('metadata-count-detail').textContent =
+                            `${metaStats.fetched} of ${metaStats.total} Google Photos`;
+                    }
+                } catch (e) {
+                    document.getElementById('metadata-count-detail').textContent = 'N/A';
                 }
 
                 // Sync schedule enabled checkbox
@@ -969,13 +994,11 @@
                 const progressText = document.getElementById('sync-progress-text');
                 const stopMessage = document.getElementById('sync-stop-message');
                 const syncBtn = document.getElementById('btn-sync');
-                const refetchSyncBtn = document.getElementById('btn-refetch-sync');
                 const stopBtn = document.getElementById('btn-stop-sync');
 
                 if (progress.is_syncing) {
                     progressDiv.style.display = 'block';
                     syncBtn.disabled = true;
-                    refetchSyncBtn.disabled = true;
                     syncBtn.textContent = 'Syncing...';
                     stopBtn.disabled = false;
                     stopMessage.style.display = 'none';
@@ -1035,7 +1058,6 @@
                     }
 
                     syncBtn.disabled = false;
-                    refetchSyncBtn.disabled = false;
                     syncBtn.textContent = 'Sync Now';
                     stopBtn.disabled = true;
 
@@ -1054,7 +1076,6 @@
                     // Idle state
                     progressDiv.style.display = 'none';
                     syncBtn.disabled = false;
-                    refetchSyncBtn.disabled = false;
                     syncBtn.textContent = 'Sync Now';
                     stopBtn.disabled = true;
                     if (syncPollInterval) {
@@ -1067,9 +1088,8 @@
             }
         }
 
-        // Shared sync trigger function
-        // refetchAll: if true, reset all metadata flags and re-fetch everything
-        async function triggerSync(refetchAll = false) {
+        // Sync trigger function
+        async function triggerSync() {
             const progressDiv = document.getElementById('sync-progress');
             const stageHeader = document.getElementById('sync-stage-header');
             const albumInfo = document.getElementById('sync-album-info');
@@ -1102,27 +1122,18 @@
 
             // Show progress immediately
             progressDiv.style.display = 'block';
-            stageHeader.textContent = refetchAll ? 'Starting full re-sync...' : 'Starting sync...';
+            stageHeader.textContent = 'Starting sync...';
             albumInfo.textContent = '';
             progressBar.style.width = '0%';
             progressText.textContent = '';
             stopMessage.style.display = 'none';
 
             document.getElementById('btn-sync').disabled = true;
-            document.getElementById('btn-refetch-sync').disabled = true;
             document.getElementById('btn-sync').textContent = 'Syncing...';
             document.getElementById('btn-stop-sync').disabled = false;
 
             // Always use update_all_captions=true (fetch for new + unfetched photos)
-            // If refetchAll, also set force_refetch_captions to reset all flags first
-            if (refetchAll) {
-                await apiCall('/api/sync', 'POST', {
-                    update_all_captions: true,
-                    force_refetch_captions: true
-                });
-            } else {
-                await apiCall('/api/sync', 'POST', { update_all_captions: true });
-            }
+            await apiCall('/api/sync', 'POST', { update_all_captions: true });
 
             // Start polling for progress
             if (!syncPollInterval) {
@@ -1130,15 +1141,8 @@
             }
         }
 
-        // Sync Now - fetch metadata for new + unfetched photos
-        document.getElementById('btn-sync').addEventListener('click', () => triggerSync(false));
-
-        // Full Re-sync - reset flags and re-fetch everything (with confirmation)
-        document.getElementById('btn-refetch-sync').addEventListener('click', () => {
-            if (confirm('This will sync photos AND re-download metadata for ALL Google Photos. This may take a long time. Continue?')) {
-                triggerSync(true);
-            }
-        });
+        // Sync Now button
+        document.getElementById('btn-sync').addEventListener('click', () => triggerSync());
 
         // Stop sync button
         document.getElementById('btn-stop-sync').addEventListener('click', async () => {
@@ -1269,9 +1273,9 @@
             });
         }
 
-        // Clear cache button
+        // Clear photo cache button
         document.getElementById('btn-clear-cache').addEventListener('click', async () => {
-            if (confirm('Are you sure you want to clear all cached photos? They will be re-downloaded on the next sync.')) {
+            if (confirm('Are you sure you want to delete all cached photos?\n\nThey will need to be re-downloaded on the next sync.')) {
                 const btn = document.getElementById('btn-clear-cache');
                 btn.disabled = true;
                 btn.textContent = 'Clearing...';
@@ -1288,7 +1292,30 @@
                     alert('Error clearing cache: ' + e);
                 } finally {
                     btn.disabled = false;
-                    btn.textContent = 'Clear Cache';
+                    btn.textContent = 'Clear Photo Cache';
+                }
+            }
+        });
+
+        // Reset metadata button
+        document.getElementById('btn-reset-metadata').addEventListener('click', async () => {
+            if (confirm('Are you sure you want to reset all Google Photos metadata?\n\nRe-fetching metadata can take several hours or more for large albums.')) {
+                const btn = document.getElementById('btn-reset-metadata');
+                btn.disabled = true;
+                btn.textContent = 'Resetting...';
+                try {
+                    const result = await apiCall('/api/cache/reset-metadata', 'POST');
+                    if (result.success) {
+                        alert(result.message + '. Run Sync Now to re-fetch metadata.');
+                        loadStatus();
+                    } else {
+                        alert('Error: ' + (result.error || 'Unknown error'));
+                    }
+                } catch (e) {
+                    alert('Error resetting metadata: ' + e);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = 'Reset Metadata';
                 }
             }
         });
