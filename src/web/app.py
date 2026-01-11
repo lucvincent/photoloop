@@ -63,9 +63,12 @@ def create_app(
     @app.route('/')
     def index():
         """Main dashboard page."""
+        # Use display.config if available - it gets updated on config changes
+        # whereas app.photoloop_config is the original reference from startup
+        config_obj = app.display.config if app.display else app.photoloop_config
         return render_template(
             'settings.html',
-            config=config_to_dict(app.photoloop_config)
+            config=config_to_dict(config_obj)
         )
 
     @app.route('/sw.js')
@@ -115,7 +118,9 @@ def create_app(
     @app.route('/api/config', methods=['GET'])
     def api_get_config():
         """Get current configuration."""
-        return jsonify(config_to_dict(app.photoloop_config))
+        # Use display.config if available - it gets updated on config changes
+        config_obj = app.display.config if app.display else app.photoloop_config
+        return jsonify(config_to_dict(config_obj))
 
     @app.route('/api/config', methods=['POST'])
     def api_set_config():
